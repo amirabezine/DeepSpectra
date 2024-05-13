@@ -8,22 +8,6 @@ from tqdm import tqdm
 import random
 
 
-def filter_wavelengths(wavelengths, flux, lower_bound=15250, upper_bound=15750):
-    """
-    Filters the wavelengths and corresponding flux data to include only those within a specified range.
-
-    Parameters:
-    - wavelengths (np.array): Array of wavelength data.
-    - flux (np.array): Corresponding array of flux data.
-    - lower_bound (float): Lower wavelength bound.
-    - upper_bound (float): Upper wavelength bound.
-
-    Returns:
-    - np.array: Filtered wavelengths.
-    - np.array: Filtered flux.
-    """
-    mask = (wavelengths >= lower_bound) & (wavelengths <= upper_bound)
-    return wavelengths[mask], flux[mask]
 
 
 
@@ -33,13 +17,12 @@ def ensure_native_byteorder(array):
     return array
 
 class filteredAPOGEEDataset(Dataset):
-    def __init__(self, directory, max_files=None):
+    def __init__(self, directory, max_files=None, lower_bound=None, upper_bound=None):
         """
         Args:
             directory (string): Directory with all the FITS files.
             max_files (int): Maximum number of FITS files to load (optional).
         """
-        self.data = self.load_data(directory)
         self.lower_bound = lower_bound
         self.upper_bound = upper_bound
         all_files = [os.path.join(directory, f) for f in os.listdir(directory) if f.endswith('.fits')]
@@ -65,7 +48,9 @@ class filteredAPOGEEDataset(Dataset):
             
             wavelength_var = self.calculate_wavelength(header, variation).astype(np.float32)
             
-            resolution = wavelength / (header['CDELT1'] * np.mean(wavelength))
+            mask = (wavelength >= self.lower_bound) & (wavelength <= self.upper_bound)
+            wavelength = wavelength[mask]
+            flux = flux[mask]
 
 
 
@@ -118,3 +103,6 @@ class filteredAPOGEEDataset(Dataset):
             ndarray: A mask array where the value is 1 if the corresponding flux is zero, and 0 otherwise.
         """
         return np.where(flux == 0, 1, 0)
+
+
+
