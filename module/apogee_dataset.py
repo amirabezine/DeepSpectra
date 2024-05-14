@@ -39,9 +39,9 @@ class APOGEEDataset(Dataset):
             snr = self.get_snr(hdul)
 
 
-            variation = hdul[2].data.astype(np.float32)
+            sigma = hdul[2].data.astype(np.float32)
             
-            wavelength_var = self.calculate_wavelength(header, variation).astype(np.float32)
+            wavelength_var = self.calculate_wavelength(header, sigma).astype(np.float32)
     
             resolution = wavelength / (header['CDELT1'] * np.mean(wavelength))
 
@@ -50,16 +50,16 @@ class APOGEEDataset(Dataset):
 
             # Ensure the arrays are in the native byte order
             flux = ensure_native_byteorder(flux)
-            variation = ensure_native_byteorder(variation)
+            sigma = ensure_native_byteorder(sigma)
             wavelength = ensure_native_byteorder(wavelength)
          
 
             # Convert to torch tensors
             flux = torch.from_numpy(flux)
-            variation = torch.from_numpy(variation)
+            sigma = torch.from_numpy(sigma)
             wavelength = torch.from_numpy(wavelength)
 
-            flux_mask = self.create_mask(flux.numpy())  
+            flux_mask = self.create_mask(flux.numpy(), sigma.numpy())  
             flux_mask = torch.from_numpy(flux_mask)
 
             return  idx, {'wavelength': wavelength,
@@ -67,7 +67,8 @@ class APOGEEDataset(Dataset):
                     'snr': snr, 
                     'flux_mask': flux_mask,
                   
-                   'variation' : variation,
+                   'sigma' : sigma,
+                         
                    'wavelength_var': wavelength_var}
 
          
@@ -90,12 +91,17 @@ class APOGEEDataset(Dataset):
         except KeyError:
             return 0
 
-    def create_mask(self, flux):
+    def create_mask(self, flux, sigma):
         """
-        Creates a mask for the flux array.
+        Creates a mask for the flux array where the mask is 0 if the flux is zero or sigma > 0.5, and 1 otherwise.
+        
         Args:
             flux (ndarray): Array of flux values.
+            sigma (ndarray): Array of sigma values corresponding to each flux value.
+        
         Returns:
-            ndarray: A mask array where the value is 1 if the corresponding flux is zero, and 0 otherwise.
+            ndarray: A mask array where the value is 0 if the corresponding flux is zero or sigma > 0.5, and 1 otherwise.
         """
-        return np.where(flux == 0, 1, 0)
+        mask = np.where((flux == 0) | (sigma > 0.5), 0, 1)
+        return mask
+
