@@ -1,0 +1,17 @@
+paths:
+  hdf5_data: "data/hdf5/spectra.hdf5"
+  fits_directory: "../../../../projects/k-pop/spectra/apogee/dr17"
+
+training:
+  num_workers: 16
+  batch_size: 32
+  num_epochs: 100
+  learning_rate: 0.001
+  latent_dim: 50
+  max_files: 1500
+  split_ratios: [0.7, 0.2, 0.1]  # Train, validation, test split ratios
+
+model:
+  generator_layers: [256, 512, 1024, 2048, 1024, 512]
+  activation_function: "ReLU"
+  output_dim: 2048
