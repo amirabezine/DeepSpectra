@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
 
 def weighted_mse_loss(input, target, weight):
-    assert input.shape == target.shape == weight.shape, "Shapes of input, target, and weight must match"
+    assert input.shape == target.shape == weight.shape, f'Shapes of input {input.shape}, target {target.shape}, and weight {weight.shape} must match'
     loss = torch.mean(weight * (input - target) ** 2)
     return loss
 
@@ -23,7 +23,10 @@ def validate_glo(generator, latent_code, dataloader, device):
             flux = data['flux'].to(device)
             mask = data['flux_mask'].to(device)
 
-            flux_hat = generator(latent_code)
+            # flux_hat = generator(latent_code)
+            # Expand latent_code to match the batch size
+            flux_hat = generator(latent_code.expand(data['flux'].size(0), -1))
+
             weight = mask  
             loss = weighted_mse_loss(flux_hat, flux, weight)
             total_loss += loss.item()
@@ -59,7 +62,12 @@ def train_glo(generator, latent_code, train_loader, val_loader, config, device):
             mask = data['flux_mask'].to(device)
     
             optimizer.zero_grad()
-            flux_hat = generator(latent_code)
+            # flux_hat = generator(latent_code)
+            # print(f'Generated flux_hat shape: {flux_hat.shape}')
+            # Expand latent_code to match the batch size
+            flux_hat = generator(latent_code.expand(data['flux'].size(0), -1))
+
+
             weight = mask  
             loss = weighted_mse_loss(flux_hat, flux, weight)
             loss.backward()
