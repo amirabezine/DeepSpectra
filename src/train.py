@@ -70,11 +70,13 @@ def train_glo(generator, train_loader, val_loader, latent_dim, config, device):
         total_train_loss = 0.0
         for data in tqdm(train_loader, total=len(train_loader)):
             flux = data['flux'].to(device)
+            mask = data['flux_mask'].to(device)
             z = torch.randn(flux.size(0), latent_dim).to(device)  # Batch of latent codes
     
             optimizer.zero_grad()
             flux_hat = generator(z)
-            loss = mse_loss(flux_hat, flux)
+            weight = mask  
+            loss = weighted_mse_loss(flux_hat, flux, weight)  # Calculate reconstruction loss
             loss.backward()
             optimizer.step()
     

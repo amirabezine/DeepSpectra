@@ -3,16 +3,12 @@ No checkpoint found at '/arc/home/Amirabezine/deepSpectra/checkpoints//checkpoin
 No checkpoint found at '/arc/home/Amirabezine/deepSpectra/checkpoints//checkpoint_best.pth.tar'
   0%|          | 0/10 [00:00<?, ?it/s]/opt/conda/lib/python3.11/multiprocessing/popen_fork.py:66: RuntimeWarning: os.fork() was called. os.fork() is incompatible with multithreaded code, and JAX is multithreaded, so this will likely lead to a deadlock.
   self.pid = os.fork()
- 10%|█         | 1/10 [00:06<01:01,  6.89s/it]100%|██████████| 10/10 [00:07<00:00,  1.37it/s]
-Epoch [1/100], Training Loss: 4154.9284
+  0%|          | 0/10 [00:10<?, ?it/s]
 Traceback (most recent call last):
-  File "/arc/home/Amirabezine/deepSpectra/./src/train.py", line 163, in <module>
+  File "/arc/home/Amirabezine/deepSpectra/./src/train.py", line 166, in <module>
     trained_generator, train_loss_history, val_loss_history = train_glo(generator, train_loader, val_loader, latent_dim, config, device)
                                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/arc/home/Amirabezine/deepSpectra/./src/train.py", line 84, in train_glo
-    avg_val_loss = validate_glo(generator, val_loader, latent_dim, device)
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/arc/home/Amirabezine/deepSpectra/./src/train.py", line 39, in validate_glo
-    loss = weighted_mse_loss(flux_hat, flux, weight)  # Calculate reconstruction loss
-           ^^^^^^^^^^^^^^^^^
-NameError: name 'weighted_mse_loss' is not defined
+  File "/arc/home/Amirabezine/deepSpectra/./src/train.py", line 77, in train_glo
+    loss = mse_loss(flux_hat, flux)
+           ^^^^^^^^
+NameError: name 'mse_loss' is not defined
