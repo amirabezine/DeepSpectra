@@ -2,49 +2,44 @@ import torch
 import torch.optim as optim
 from tqdm import tqdm
 from model import Generator
-from dataset import get_dataloaders
+from dataset import APOGEEDataset
+from checkpoint import save_checkpoint, load_checkpoint
+from utils import get_config, resolve_path
+from torch.utils.data import DataLoader
 import os
-import yaml
-from torch.utils.tensorboard import SummaryWriter
-
-
 
 def weighted_mse_loss(output, target, weight):
+    # print(f'Output shape: {output.shape}, Target shape: {target.shape}')  # Debugging line
     return torch.mean(weight * (output - target) ** 2)
 
-def save_checkpoint(state, filename="checkpoint.pth.tar"):
-    torch.save(state, filename)
-
-def train_glo(config):
-    writer = SummaryWriter(log_dir=config['paths']['tensorboard'])
-    
-    generator = Generator(
-        config['training']['latent_dim'],
-        config['model']['output_dim'],
-        config['model']['generator_layers'],
-        getattr(torch.nn, config['model']['activation_function'])
-    )
-    
-    train_loader, val_loader, test_loader = get_dataloaders(
-        config['paths']['hdf5_data'],
-        config['training']['batch_size'],
-        config['training']['num_workers'],
-        config['training']['split_ratios']
-    )
+def train_glo(generator, dataloader, latent_dim, config):
+    # Load checkpoint if available
+    latest_checkpoint_path = resolve_path(config['paths']['checkpoints']) + '/checkpoint_latest.pth.tar'
+    best_checkpoint_path = resolve_path(config['paths']['checkpoints']) + '/checkpoint_best.pth.tar'
+    latest_checkpoint = load_checkpoint(latest_checkpoint_path)
+    best_checkpoint = load_checkpoint(best_checkpoint_path)
 
     generator_optimizer = optim.Adam(generator.parameters(), lr=config['training']['learning_rate'])
+    
+    start_epoch = 0
+    best_loss = float('inf')
+    
+    if latest_checkpoint:
+        generator.load_state_dict(latest_checkpoint['state_dict'])
+        generator_optimizer.load_state_dict(latest_checkpoint['optimizer'])
+        start_epoch = latest_checkpoint['epoch']
+        best_loss = latest_checkpoint['best_loss']
+    
     generator.train()
     
-    latent_codes = torch.randn(len(train_loader.dataset), config['training']['latent_dim'], requires_grad=True)
+    latent_codes = torch.randn(len(dataloader.dataset), latent_dim, requires_grad=True)
     latent_optimizer = optim.Adam([latent_codes], lr=config['training']['learning_rate'])
-
+    
     loss_history = []
 
-    best_loss = float('inf')
-
-    for epoch in range(config['training']['num_epochs']):
+    for epoch in range(start_epoch, config['training']['num_epochs']):
         total_loss = 0.0
-        for idx, data in tqdm(enumerate(train_loader), total=len(train_loader)):
+        for idx, data in tqdm(enumerate(dataloader), total=len(dataloader)):
             flux = data['flux']
             sigma = data['sigma']
             mask = data['flux_mask']
@@ -62,22 +57,28 @@ def train_glo(config):
             
             total_loss += loss.item()
         
-        avg_loss = total_loss / len(train_loader)
+        avg_loss = total_loss / len(dataloader)
         loss_history.append(avg_loss)
-        writer.add_scalar('Training Loss', avg_loss, epoch)
         print(f'Epoch [{epoch+1}/{config["training"]["num_epochs"]}], Loss: {avg_loss:.4f}')
 
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'state_dict': generator.state_dict(),
-                'optimizer': generator_optimizer.state_dict(),
-                'loss': avg_loss,
-                'latent_codes': latent_codes
-            }, filename=os.path.join(config['paths']['checkpoints'], f'checkpoint_epoch_{epoch+1}.pth.tar'))
+        is_best = avg_loss < best_loss
+        best_loss = min(avg_loss, best_loss)
 
-    writer.close()
+        checkpoint_state = {
+            'epoch': epoch + 1,
+            'state_dict': generator.state_dict(),
+            'optimizer': generator_optimizer.state_dict(),
+            'best_loss': best_loss,
+            'latent_codes': latent_codes
+        }
+        save_checkpoint(checkpoint_state, filename=latest_checkpoint_path)
+
+        if is_best:
+            save_checkpoint(checkpoint_state, filename=best_checkpoint_path)
+
+        if (epoch + 1) % config['training']['checkpoint_interval'] == 0:
+            save_checkpoint(checkpoint_state, filename=resolve_path(config['paths']['checkpoints']) + f'/checkpoint_epoch_{epoch+1}.pth.tar')
+
     return generator, loss_history
 
 def plot_loss_history(loss_history):
@@ -90,15 +91,43 @@ def plot_loss_history(loss_history):
     plt.legend()
     plt.show()
 
+def plot_spectrum(wavelength, generated_flux, original_flux=None):
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(10, 6))
+    plt.plot(wavelength, generated_flux, label='Generated Flux', color='blue')
+    if original_flux is not None:
+        plt.plot(wavelength, original_flux, label='Original Flux', color='red', alpha=0.5)
+    plt.xlabel('Wavelength')
+    plt.ylabel('Flux')
+    plt.title('Flux vs. Wavelength')
+    plt.legend()
+    plt.show()
+
 if __name__ == "__main__":
-    with open('config/config.yaml', 'r') as f:
-        config = yaml.safe_load(f)
-
-    os.makedirs(config['paths']['checkpoints'], exist_ok=True)
+    config = get_config()
     
-    trained_generator, loss_history = train_glo(config)
+    os.makedirs(resolve_path(config['paths']['checkpoints']), exist_ok=True)
+    
+    hdf5_path = resolve_path(config['paths']['hdf5_data'])
+    num_workers = config['training']['num_workers']
+    dataset = APOGEEDataset(hdf5_path, max_files=config['training']['max_files'])
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=num_workers)
+
+    latent_dim = config['training']['latent_dim']
+    sample = next(iter(dataloader))
+    flux_example = sample['flux']
+    wavelength_example = sample['wavelength']
+    output_dim = flux_example.size(0)
+
+    generator_layers = config['model']['generator_layers']
+    activation_function = getattr(torch.nn, config['model']['activation_function'])
+
+    generator = Generator(latent_dim, output_dim, generator_layers, activation_function)
+    
+    trained_generator, loss_history = train_glo(generator, dataloader, latent_dim, config)
+
+    test_latent_code = torch.randn(1, latent_dim)
+    generated_sample = trained_generator(test_latent_code).detach().numpy().flatten()
+
+    plot_spectrum(wavelength_example.numpy(), generated_sample, original_flux=flux_example.numpy())
     plot_loss_history(loss_history)
-
-
-
-

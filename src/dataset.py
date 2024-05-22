@@ -1,6 +1,6 @@
 import h5py
 import torch
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset
 
 class APOGEEDataset(Dataset):
     def __init__(self, hdf5_file, max_files=None):
@@ -28,6 +28,7 @@ class APOGEEDataset(Dataset):
             'flux_mask': torch.tensor(flux_mask, dtype=torch.float32),
             'sigma': torch.tensor(sigma, dtype=torch.float32)
         }
+
 
 def get_dataloaders(hdf5_file, batch_size, num_workers, split_ratios):
     dataset = APOGEEDataset(hdf5_file)
