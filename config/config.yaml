@@ -5,12 +5,12 @@ paths:
   tensorboard: "tensorboard/"
 
 training:
-  num_workers: 16
+  num_workers: 13
   batch_size: 32
   num_epochs: 100
   learning_rate: 0.01
   latent_dim: 50
-  max_files: 50000
+  max_files: 400
   split_ratios: [0.7, 0.2, 0.1]
   checkpoint_interval: 10  # Save checkpoints every 10 epochs
 

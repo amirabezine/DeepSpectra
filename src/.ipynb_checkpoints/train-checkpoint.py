@@ -10,19 +10,22 @@ import os
 import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
 
-def mse_loss(input, target):
+def weighted_mse_loss(input, target, weight):
     """
-    Compute the mean squared error loss.
-
+    Compute the weighted mean squared error loss.
     Args:
         input (torch.Tensor): The predicted values.
         target (torch.Tensor): The ground truth values.
-
+        weight (torch.Tensor): The weights to apply to each element.
     Returns:
-        torch.Tensor: The computed MSE loss.
+        torch.Tensor: The computed weighted MSE loss.
     """
-    assert input.shape == target.shape, "Shapes of input and target must match"
-    loss = torch.mean((input - target) ** 2)
+    # Ensure the weight tensor has the same shape as input and target
+    assert input.shape == target.shape == weight.shape, "Shapes of input, target, and weight must match"
+
+    # Compute the mean of the weighted squared differences
+    loss = torch.mean(weight * (input - target) ** 2)
+
     return loss
 
 def validate_glo(generator, dataloader, latent_dim, device):
