@@ -11,24 +11,11 @@ import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
 
 def weighted_mse_loss(input, target, weight):
-    """
-    Compute the weighted mean squared error loss.
-    Args:
-        input (torch.Tensor): The predicted values.
-        target (torch.Tensor): The ground truth values.
-        weight (torch.Tensor): The weights to apply to each element.
-    Returns:
-        torch.Tensor: The computed weighted MSE loss.
-    """
-    # Ensure the weight tensor has the same shape as input and target
     assert input.shape == target.shape == weight.shape, "Shapes of input, target, and weight must match"
-
-    # Compute the mean of the weighted squared differences
     loss = torch.mean(weight * (input - target) ** 2)
-
     return loss
 
-def validate_glo(generator, dataloader, latent_dim, device):
+def validate_glo(generator, latent_code, dataloader, device):
     generator.eval()
     total_loss = 0.0
     with torch.no_grad():
@@ -36,21 +23,20 @@ def validate_glo(generator, dataloader, latent_dim, device):
             flux = data['flux'].to(device)
             mask = data['flux_mask'].to(device)
 
-            z = torch.randn(flux.size(0), latent_dim).to(device)  # Batch of latent codes
-            flux_hat = generator(z)
+            flux_hat = generator(latent_code)
             weight = mask  
-            loss = weighted_mse_loss(flux_hat, flux, weight)  # Calculate reconstruction loss
+            loss = weighted_mse_loss(flux_hat, flux, weight)
             total_loss += loss.item()
     avg_loss = total_loss / len(dataloader)
     return avg_loss
 
-def train_glo(generator, train_loader, val_loader, latent_dim, config, device):
+def train_glo(generator, latent_code, train_loader, val_loader, config, device):
     latest_checkpoint_path = resolve_path(config['paths']['checkpoints']) + '/checkpoint_latest.pth.tar'
     best_checkpoint_path = resolve_path(config['paths']['checkpoints']) + '/checkpoint_best.pth.tar'
     latest_checkpoint = load_checkpoint(latest_checkpoint_path)
     best_checkpoint = load_checkpoint(best_checkpoint_path)
 
-    optimizer = optim.Adam(generator.parameters(), lr=config['training']['learning_rate'])
+    optimizer = optim.Adam(list(generator.parameters()) + [latent_code], lr=config['training']['learning_rate'])
     
     start_epoch = 0
     best_val_loss = float('inf')
@@ -71,12 +57,11 @@ def train_glo(generator, train_loader, val_loader, latent_dim, config, device):
         for data in tqdm(train_loader, total=len(train_loader)):
             flux = data['flux'].to(device)
             mask = data['flux_mask'].to(device)
-            z = torch.randn(flux.size(0), latent_dim).to(device)  # Batch of latent codes
     
             optimizer.zero_grad()
-            flux_hat = generator(z)
+            flux_hat = generator(latent_code)
             weight = mask  
-            loss = weighted_mse_loss(flux_hat, flux, weight)  # Calculate reconstruction loss
+            loss = weighted_mse_loss(flux_hat, flux, weight)
             loss.backward()
             optimizer.step()
     
@@ -86,7 +71,7 @@ def train_glo(generator, train_loader, val_loader, latent_dim, config, device):
         train_loss_history.append(avg_train_loss)
         print(f'Epoch [{epoch+1}/{config["training"]["num_epochs"]}], Training Loss: {avg_train_loss:.4f}')
         
-        avg_val_loss = validate_glo(generator, val_loader, latent_dim, device)
+        avg_val_loss = validate_glo(generator, latent_code, val_loader, device)
         val_loss_history.append(avg_val_loss)
         print(f'Epoch [{epoch+1}/{config["training"]["num_epochs"]}], Validation Loss: {avg_val_loss:.4f}')
 
@@ -96,6 +81,7 @@ def train_glo(generator, train_loader, val_loader, latent_dim, config, device):
         checkpoint_state = {
             'epoch': epoch + 1,
             'state_dict': generator.state_dict(),
+            'latent_code': latent_code,
             'optimizer': optimizer.state_dict(),
             'best_loss': best_val_loss
         }
@@ -107,7 +93,7 @@ def train_glo(generator, train_loader, val_loader, latent_dim, config, device):
         if (epoch + 1) % config['training']['checkpoint_interval'] == 0:
             save_checkpoint(checkpoint_state, filename=resolve_path(config['paths']['checkpoints']) + f'/checkpoint_epoch_{epoch+1}.pth.tar')
 
-    return generator, train_loss_history, val_loss_history
+    return generator, latent_code, train_loss_history, val_loss_history
 
 def plot_loss_history(train_loss_history, val_loss_history, filename='loss.png'):
     import matplotlib.pyplot as plt
@@ -164,11 +150,13 @@ if __name__ == "__main__":
     activation_function = getattr(torch.nn, config['model']['activation_function'])
 
     generator = Generator(latent_dim, output_dim, generator_layers, activation_function).to(device)
-    
-    trained_generator, train_loss_history, val_loss_history = train_glo(generator, train_loader, val_loader, latent_dim, config, device)
 
-    test_latent_code = torch.randn(1, latent_dim).to(device)
-    generated_sample = trained_generator(test_latent_code).detach().cpu().numpy().flatten()
+    latent_code = torch.randn(latent_dim, requires_grad=True, device=device)
+
+    trained_generator, trained_latent_code, train_loss_history, val_loss_history = train_glo(generator, latent_code, train_loader, val_loader, config, device)
+
+    test_latent_code = trained_latent_code.detach().cpu().numpy().flatten()
+    generated_sample = trained_generator(torch.tensor(test_latent_code, device=device)).detach().cpu().numpy().flatten()
 
     plot_spectrum(wavelength_example.cpu().numpy(), generated_sample, original_flux=flux_example[0].cpu().numpy(), filename='spectrum.png')
     plot_loss_history(train_loss_history, val_loss_history, filename='loss.png')

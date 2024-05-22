@@ -1,8 +1,0 @@
-torch
-torchvision
-tqdm
-numpy
-h5py
-matplotlib
-PyYAML
-astropy
