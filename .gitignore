@@ -2,3 +2,5 @@ data/hdf5/spectra.hdf5
 data/hdf5/spectra3.hdf5
 data/hdf5/spectra2.hdf5
 logs/*
+checkpoints/*
+
