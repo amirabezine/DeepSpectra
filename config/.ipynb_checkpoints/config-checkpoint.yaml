@@ -1,0 +1,20 @@
+paths:
+  hdf5_data: "data/hdf5/spectra.hdf5"
+  fits_directory: "../../../projects/k-pop/spectra/apogee/dr17"
+  checkpoints: "checkpoints/"
+  tensorboard: "tensorboard/"
+
+training:
+  num_workers: 10
+  batch_size: 10
+  num_epochs: 100
+  learning_rate: 0.001
+  latent_dim: 50
+  max_files: 30000
+  split_ratios: [0.7, 0.2, 0.1]
+  checkpoint_interval: 10  # Save checkpoints every 10 epochs
+
+model:
+  generator_layers: [256, 512, 1024, 2048, 1024, 512]
+  activation_function: "Sigmoid"
+  output_dim: 8575

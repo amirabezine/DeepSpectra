@@ -1,74 +1,165 @@
-import cupy as cp
-import h5py
-from astropy.io import fits
-import os
+import torch
+import torch.optim as optim
 from tqdm import tqdm
+from model import Generator
+from dataset import APOGEEDataset
+from checkpoint import save_checkpoint, load_checkpoint
+from utils import get_config, resolve_path
+from torch.utils.data import DataLoader
+import os
+import torch.nn.functional as F
 
-def ensure_native_byteorder(array):
-    if array.dtype.byteorder not in ('=', '|'):  # '=' means native, '|' means not applicable
-        return array.byteswap().newbyteorder()  # Swap byte order to native
-    return array
-
-def calculate_wavelength(header, flux):
+def weighted_mse_loss(input, target, weight):
     """
-    Calculates the wavelength array using the FITS header information.
+    Compute the weighted mean squared error loss.
+
+    Args:
+        input (torch.Tensor): The predicted values.
+        target (torch.Tensor): The ground truth values.
+        weight (torch.Tensor): The weights to apply to each element.
+
+    Returns:
+        torch.Tensor: The computed weighted MSE loss.
     """
-    crval = header['CRVAL1']  # Starting log10 wavelength
-    cdelt = header['CDELT1']  # Log10 wavelength increment
-    crpix = header['CRPIX1']  # Reference pixel
-    n_pixels = len(flux)
-    index = cp.arange(n_pixels)
-    return 10 ** (crval + (index - (crpix - 1)) * cdelt)
+    # Ensure the weight tensor has the same shape as input and target
+    assert input.shape == target.shape == weight.shape, "Shapes of input, target, and weight must match"
 
-def create_mask(flux, sigma):
-    """
-    Creates a mask for the flux array where the mask is 0 if the flux is zero or sigma > 0.5, and 1 otherwise.
-    """
-    mask = cp.where((flux == 0) | (sigma > 0.5), 0, 1)
-    return mask
+    # Compute the mean of the weighted squared differences
+    loss = torch.mean(weight * (input - target) ** 2)
+    
+    return loss
 
-def get_snr(hdul):
-    try:
-        snr = hdul[4].data['SNR'][0]
-        return snr if snr > 0 else 0
-    except KeyError:
-        return 0
+def train_glo(generator, dataloader, latent_dim, config, device):
+    # Load checkpoint if available
+    latest_checkpoint_path = resolve_path(config['paths']['checkpoints']) + '/checkpoint_latest.pth.tar'
+    best_checkpoint_path = resolve_path(config['paths']['checkpoints']) + '/checkpoint_best.pth.tar'
+    latest_checkpoint = load_checkpoint(latest_checkpoint_path)
+    best_checkpoint = load_checkpoint(best_checkpoint_path)
 
-def convert_fits_to_hdf5(fits_dir, hdf5_path, max_files=300, save_interval=10):
-    with h5py.File(hdf5_path, 'w') as hdf5_file:
-        all_files = [f for f in os.listdir(fits_dir) if f.endswith('.fits')]
-        all_files = all_files[:max_files]  # Limit the number of files
+    generator_optimizer = optim.Adam(generator.parameters(), lr=config['training']['learning_rate'])
+    
+    start_epoch = 0
+    best_loss = float('inf')
+    
+    if latest_checkpoint:
+        generator.load_state_dict(latest_checkpoint['state_dict'])
+        generator_optimizer.load_state_dict(latest_checkpoint['optimizer'])
+        start_epoch = latest_checkpoint['epoch']
+        best_loss = latest_checkpoint['best_loss']
+    
+    generator.train()
+    
+    latent_codes = torch.randn(len(dataloader.dataset), latent_dim, device=device, requires_grad=True)
+    latent_optimizer = optim.Adam([latent_codes], lr=config['training']['learning_rate'])
+    
+    loss_history = []
+    
+    for epoch in range(start_epoch, config['training']['num_epochs']):
+        total_loss = 0.0
+        for idx, data in tqdm(enumerate(dataloader), total=len(dataloader)):
+            flux = data['flux'].to(device)
+            sigma = data['sigma'].to(device)
+            mask = data['flux_mask'].to(device)
+    
+            # Step 1: Optimize latent code z_i for each sample
+            z = latent_codes[idx].unsqueeze(0).requires_grad_(True)  # Extract and enable gradients for latent code
+            latent_optimizer = optim.Adam([z], lr=config['training']['learning_rate'])  # Optimizer for latent code
+    
+            latent_optimizer.zero_grad()  # Zero gradients
+            flux_hat = generator(z)  # Generate reconstructed flux
+            weight = mask  # Weight for loss calculation
+            loss = weighted_mse_loss(flux_hat, flux, weight)  # Calculate reconstruction loss
+            loss.backward()  # Backpropagate
+            latent_optimizer.step()  # Update latent code
+    
+            latent_codes[idx] = z.detach()  # Update the main latent code array
+    
+            # Step 2: Optimize generator parameters with the updated latent codes
+            flux_hat = generator(z)  # Generate reconstructed flux with updated latent code
+            loss = weighted_mse_loss(flux_hat, flux, weight)  # Recalculate reconstruction loss
+    
+            generator_optimizer.zero_grad()  # Zero gradients for the generator
+            loss.backward()  # Backpropagate
+            generator_optimizer.step()  # Update generator parameters
+    
+            total_loss += loss.item()  # Accumulate loss for averaging
+    
+        avg_loss = total_loss / len(dataloader)  # Average loss for the epoch
+        loss_history.append(avg_loss)  # Track loss history
+        print(f'Epoch [{epoch+1}/{config["training"]["num_epochs"]}], Loss: {avg_loss:.4f}')
+        
+        is_best = avg_loss < best_loss
+        best_loss = min(avg_loss, best_loss)
 
-        for i in tqdm(range(0, len(all_files), save_interval), desc="Converting FITS to HDF5"):
-            for file_name in all_files[i:i+save_interval]:
-                file_path = os.path.join(fits_dir, file_name)
-                with fits.open(file_path) as hdul:
-                    flux = cp.array(hdul[1].data.astype(cp.float32))
-                    header = hdul[1].header
-                    wavelength = calculate_wavelength(header, flux).astype(cp.float32)
-                    snr = get_snr(hdul)
-                    sigma = cp.array(hdul[2].data.astype(cp.float32))
-                    wavelength_var = calculate_wavelength(header, sigma).astype(cp.float32)
+        checkpoint_state = {
+            'epoch': epoch + 1,
+            'state_dict': generator.state_dict(),
+            'optimizer': generator_optimizer.state_dict(),
+            'best_loss': best_loss,
+            'latent_codes': latent_codes.cpu()  # Save latent codes on CPU to avoid GPU memory issues
+        }
+        save_checkpoint(checkpoint_state, filename=latest_checkpoint_path)
 
-                    flux = ensure_native_byteorder(flux)
-                    sigma = ensure_native_byteorder(sigma)
-                    wavelength = ensure_native_byteorder(wavelength)
+        if is_best:
+            save_checkpoint(checkpoint_state, filename=best_checkpoint_path)
 
-                    flux_mask = create_mask(flux, sigma).astype(cp.float32)
+        if (epoch + 1) % config['training']['checkpoint_interval'] == 0:
+            save_checkpoint(checkpoint_state, filename=resolve_path(config['paths']['checkpoints']) + f'/checkpoint_epoch_{epoch+1}.pth.tar')
 
-                    grp = hdf5_file.create_group(file_name)
-                    grp.create_dataset('flux', data=cp.asnumpy(flux))
-                    grp.create_dataset('wavelength', data=cp.asnumpy(wavelength))
-                    grp.create_dataset('snr', data=snr)
-                    grp.create_dataset('flux_mask', data=cp.asnumpy(flux_mask))
-                    grp.create_dataset('sigma', data=cp.asnumpy(sigma))
-                    grp.create_dataset('wavelength_var', data=cp.asnumpy(wavelength_var))
-            
-            hdf5_file.flush()  # Ensure data is written to disk
+    return generator, loss_history
+
+def plot_loss_history(loss_history, filename='loss.png'):
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(1, len(loss_history) + 1), loss_history, label='Training Loss', color='blue')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Training Loss History')
+    plt.legend()
+    plt.savefig(filename)
+    plt.show()
+
+def plot_spectrum(wavelength, generated_flux, original_flux=None, filename='spectrum.png'):
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(10, 6))
+    plt.plot(wavelength, generated_flux, label='Generated Flux', color='blue')
+    if original_flux is not None:
+        plt.plot(wavelength, original_flux, label='Original Flux', color='red', alpha=0.5)
+    plt.xlabel('Wavelength')
+    plt.ylabel('Flux')
+    plt.title('Flux vs. Wavelength')
+    plt.legend()
+    plt.savefig(filename)
+    plt.show()
 
 if __name__ == "__main__":
-    convert_fits_to_hdf5(
-        "../../../../projects/k-pop/spectra/apogee/dr17", 
-        "../data/hdf5/spectra.hdf5", 
-        max_files=50000
-    )
+    config = get_config()
+    
+    os.makedirs(resolve_path(config['paths']['checkpoints']), exist_ok=True)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+    
+    hdf5_path = resolve_path(config['paths']['hdf5_data'])
+    num_workers = config['training']['num_workers']
+    dataset = APOGEEDataset(hdf5_path, max_files=config['training']['max_files'])
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=num_workers)
+
+    latent_dim = config['training']['latent_dim']
+    sample = next(iter(dataloader))
+    flux_example = sample['flux'].to(device)
+    wavelength_example = sample['wavelength'].to(device)
+    output_dim = flux_example.size(0)
+
+    generator_layers = config['model']['generator_layers']
+    activation_function = getattr(torch.nn, config['model']['activation_function'])
+
+    generator = Generator(latent_dim, output_dim, generator_layers, activation_function).to(device)
+    
+    trained_generator, loss_history = train_glo(generator, dataloader, latent_dim, config, device)
+
+    test_latent_code = torch.randn(1, latent_dim).to(device)
+    generated_sample = trained_generator(test_latent_code).detach().cpu().numpy().flatten()
+
+    plot_spectrum(wavelength_example.cpu().numpy(), generated_sample, original_flux=flux_example.cpu().numpy(), filename='spectrum.png')
+    plot_loss_history(loss_history, filename='loss.png')

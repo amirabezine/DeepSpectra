@@ -115,18 +115,6 @@ def plot_loss_history(train_loss_history, val_loss_history, filename='loss.png')
     plt.savefig(filename)
     plt.show()
 
-def plot_spectrum(wavelength, generated_flux, original_flux=None, filename='spectrum.png'):
-    import matplotlib.pyplot as plt
-    plt.figure(figsize=(10, 6))
-    plt.plot(wavelength, generated_flux, label='Generated Flux', color='blue')
-    if original_flux is not None:
-        plt.plot(wavelength, original_flux, label='Original Flux', color='red', alpha=0.5)
-    plt.xlabel('Wavelength')
-    plt.ylabel('Flux')
-    plt.title('Flux vs. Wavelength')
-    plt.legend()
-    plt.savefig(filename)
-    plt.show()
 
 if __name__ == "__main__":
     config = get_config()
@@ -166,5 +154,5 @@ if __name__ == "__main__":
     test_latent_code = trained_latent_code.detach().cpu().numpy().flatten()
     generated_sample = trained_generator(torch.tensor(test_latent_code, device=device)).detach().cpu().numpy().flatten()
 
-    plot_spectrum(wavelength_example.cpu().numpy(), generated_sample, original_flux=flux_example[0].cpu().numpy(), filename='spectrum.png')
+    # plot_spectrum(wavelength_example.cpu().numpy(), generated_sample, original_flux=flux_example[0].cpu().numpy(), filename='spectrum.png')
     plot_loss_history(train_loss_history, val_loss_history, filename='loss.png')
