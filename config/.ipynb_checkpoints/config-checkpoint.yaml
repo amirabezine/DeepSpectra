@@ -4,19 +4,22 @@ paths:
   checkpoints: "checkpoints/"
   plots: "plots/"
   tensorboard: "tensorboard/"
+  latent: "latent/"
 
 training:
   num_workers: 10
   batch_size: 10
-  num_epochs: 100
+  num_epochs: 50
   learning_rate: 0.001
-  latent_learning_rate: 0.0001
+  latent_learning_rate: 0.001
   latent_dim: 5
   max_files: 500
   split_ratios: [0.7, 0.2, 0.1]
-  checkpoint_interval: 10  # Save checkpoints every 10 epochs
+  checkpoint_interval: 10
+  scheduler_gamma: 30
+  scheduler_step_size: 0.1
 
 model:
-  generator_layers: [256, 512, 1024, 512] ## was [256, 512, 1024, 2048, 1024, 512]
+  generator_layers: [256, 512, 1024, 512] 
   activation_function: "LeakyReLU"
   output_dim: 8575
