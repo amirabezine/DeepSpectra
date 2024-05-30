@@ -12,9 +12,16 @@ from sklearn.model_selection import train_test_split
 import h5py
 import matplotlib.pyplot as plt
 
-def weighted_mse_loss(input, target, weight):
-    assert input.shape == target.shape == weight.shape, f'Shapes of input {input.shape}, target {target.shape}, and weight {weight.shape} must match'
-    loss = torch.mean(weight * (input - target) ** 2)
+def weighted_mse_loss(input, target, loss_weight):
+    assert input.shape == target.shape == loss_weight.shape, f'Shapes of input {input.shape}, target {target.shape}, and loss weight {loss_weight.shape} must match'
+    
+    # # Ensure loss weights are non-negative
+    # loss_weight = torch.clamp(loss_weight, min=0.0)
+    
+    # # Print loss weight statistics for debugging
+    # print(f"Loss Weight stats - min: {loss_weight.min().item()}, max: {loss_weight.max().item()}, mean: {loss_weight.mean().item()}")
+    
+    loss = torch.mean(loss_weight * (input - target) ** 2)
     return loss
 
 def validate_glo(generator, latent_dim, dataloader, device):
@@ -24,15 +31,19 @@ def validate_glo(generator, latent_dim, dataloader, device):
         for data in dataloader:
             flux = data['flux'].to(device)
             mask = data['flux_mask'].to(device)
-            ivar= data['sigma'].to(device)
+            ivar = data['sigma'].to(device)
+            
+            # Clamp ivar to be non-negative
+            ivar = torch.clamp(ivar, min=0.0)
+            
             batch_size = flux.size(0)
 
             # Generate latent code for the batch
             latent_code = torch.randn(batch_size, latent_dim, requires_grad=False, device=device)
             flux_hat = generator(latent_code)
 
-            weight = mask  * ivar
-            loss = weighted_mse_loss(flux_hat, flux, weight)
+            loss_weight = mask * ivar
+            loss = weighted_mse_loss(flux_hat, flux, loss_weight)
             total_loss += loss.item()
     avg_loss = total_loss / len(dataloader)
     return avg_loss
@@ -68,7 +79,11 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
         for batch_idx, data in enumerate(tqdm(train_loader, total=len(train_loader))):
             flux = data['flux'].to(device)
             mask = data['flux_mask'].to(device)
-            ivar= data['sigma'].to(device)
+            ivar = data['sigma'].to(device)
+            
+            # Clamp ivar to be non-negative
+            ivar = torch.clamp(ivar, min=0.0)
+            
             spectrum_index = data['index']
             batch_size = flux.size(0)
 
@@ -80,8 +95,11 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
             generator.train()
             optimizer_weights.zero_grad()
             flux_hat = generator(latent_code)
-            weight = mask  * ivar
-            loss = weighted_mse_loss(flux_hat, flux, weight)
+            loss_weight = mask * ivar
+
+
+
+            loss = weighted_mse_loss(flux_hat, flux, loss_weight)
             loss.backward()
             optimizer_weights.step()
             
@@ -89,7 +107,7 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
             generator.eval()
             optimizer_latent.zero_grad()
             flux_hat = generator(latent_code)
-            loss = weighted_mse_loss(flux_hat, flux, weight)
+            loss = weighted_mse_loss(flux_hat, flux, loss_weight)
             loss.backward()
             optimizer_latent.step()
 
@@ -150,7 +168,7 @@ def plot_loss_history(train_loss_history, val_loss_history, config, filename='lo
 
 def plot_latent_evolution(latent_path, batch_idx, spectrum_idx, num_epochs, config):
     latent_vectors = []
-    epochs = range(1, num_epochs+1)
+    epochs = range(1, num_epochs + 1)
     
     for epoch in epochs:
         latent_file = os.path.join(latent_path, f'latent_epoch_{epoch}_batch_{batch_idx + 1}_index_{spectrum_idx}.pt')
