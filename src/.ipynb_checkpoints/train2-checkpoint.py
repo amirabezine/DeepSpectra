@@ -24,13 +24,14 @@ def validate_glo(generator, latent_dim, dataloader, device):
         for data in dataloader:
             flux = data['flux'].to(device)
             mask = data['flux_mask'].to(device)
+            ivar= data['sigma'].to(device)
             batch_size = flux.size(0)
 
             # Generate latent code for the batch
             latent_code = torch.randn(batch_size, latent_dim, requires_grad=False, device=device)
             flux_hat = generator(latent_code)
 
-            weight = mask  
+            weight = mask  * ivar
             loss = weighted_mse_loss(flux_hat, flux, weight)
             total_loss += loss.item()
     avg_loss = total_loss / len(dataloader)
@@ -67,6 +68,7 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
         for batch_idx, data in enumerate(tqdm(train_loader, total=len(train_loader))):
             flux = data['flux'].to(device)
             mask = data['flux_mask'].to(device)
+            ivar= data['sigma'].to(device)
             spectrum_index = data['index']
             batch_size = flux.size(0)
 
@@ -78,7 +80,7 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
             generator.train()
             optimizer_weights.zero_grad()
             flux_hat = generator(latent_code)
-            weight = mask  
+            weight = mask  * ivar
             loss = weighted_mse_loss(flux_hat, flux, weight)
             loss.backward()
             optimizer_weights.step()
