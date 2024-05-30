@@ -1,114 +1,70 @@
 import torch
 import torch.optim as optim
 from tqdm import tqdm
-from model import Generator  # Ensure this imports the correct Generator class definition
-from dataset import APOGEEDataset, get_dataloaders
+from model import Generator
+from dataset import APOGEEDataset
 from checkpoint import save_checkpoint, load_checkpoint
 from utils import get_config, resolve_path
+from torch.utils.data import DataLoader
 import os
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
-from sklearn.manifold import TSNE
+from sklearn.decomposition import PCA
+from sklearn.model_selection import train_test_split
 
 def weighted_mse_loss(input, target, weight):
-    assert input.shape == target.shape == weight.shape, f'Shapes of input {input.shape}, target {target.shape}, and weight {weight.shape} must match'
-    loss = torch.mean(weight * (input - target) ** 2)
-    return loss
+    return torch.mean(weight * (input - target) ** 2)
 
-def validate_glo(generator, latent_codes, dataloader, device):
-    generator.eval()
-    total_loss = 0.0
-    with torch.no_grad():
-        for i, data in enumerate(dataloader):
-            flux = data['flux'].to(device)
-            mask = data['flux_mask'].to(device)
+def train_glo(generator, train_loader, val_loader, config, device):
+    latent_codes = {idx: torch.randn(config['training']['latent_dim'], requires_grad=True, device=device)
+                    for idx in range(len(train_loader.dataset))}
+    optimizer = optim.Adam(list(generator.parameters()) + list(latent_codes.values()), lr=config['training']['learning_rate'])
+    train_loss_history, val_loss_history = [], []
+    latent_code_snapshots = []
 
-            # Retrieve the corresponding latent codes for the current batch
-            batch_latent_codes = latent_codes[data['index']].to(device)
-            flux_hat = generator(batch_latent_codes)
-
-            weight = mask  
-            loss = weighted_mse_loss(flux_hat, flux, weight)
-            total_loss += loss.item()
-    avg_loss = total_loss / len(dataloader)
-    return avg_loss
-
-def train_glo(generator, latent_codes, train_loader, val_loader, config, device):
-    latest_checkpoint_path = resolve_path(config['paths']['checkpoints']) + '/checkpoint_latest.pth.tar'
-    best_checkpoint_path = resolve_path(config['paths']['checkpoints']) + '/checkpoint_best.pth.tar'
-    latest_checkpoint = load_checkpoint(latest_checkpoint_path)
-    best_checkpoint = load_checkpoint(best_checkpoint_path)
-
-    # Initialize the optimizer with both generator parameters and latent codes
-    optimizer = optim.Adam(list(generator.parameters()) + [latent_codes], lr=config['training']['learning_rate'])
-    
-    start_epoch = 0
-    best_val_loss = float('inf')
-    
-    if latest_checkpoint:
-        generator.load_state_dict(latest_checkpoint['state_dict'])
-        optimizer.load_state_dict(latest_checkpoint['optimizer'])
-        start_epoch = latest_checkpoint['epoch']
-        best_val_loss = latest_checkpoint['best_loss']
-    
-    generator.train()
-    
-    train_loss_history = []
-    val_loss_history = []
-    
-    for epoch in range(start_epoch, config['training']['num_epochs']):
+    for epoch in range(config['training']['num_epochs']):
+        generator.train()
         total_train_loss = 0.0
-        for i, data in enumerate(tqdm(train_loader, total=len(train_loader))):
-            flux = data['flux'].to(device)
-            mask = data['flux_mask'].to(device)
+        for data in tqdm(train_loader, total=len(train_loader)):
+            flux, mask = data['flux'].to(device), data['flux_mask'].to(device)
+            idxs = data['index']
 
             optimizer.zero_grad()
-            
-            # Retrieve and use the corresponding latent codes for the current batch
-            batch_latent_codes = latent_codes[data['index']].to(device)
+            batch_latent_codes = torch.stack([latent_codes[idx.item()] for idx in idxs])
             flux_hat = generator(batch_latent_codes)
 
-            weight = mask  
-            loss = weighted_mse_loss(flux_hat, flux, weight)
+            loss = weighted_mse_loss(flux_hat, flux, mask)
             loss.backward()
             optimizer.step()
 
-            # Project latent codes onto the unit sphere
-            with torch.no_grad():
-                latent_codes[data['index']] = latent_codes[data['index']] / torch.norm(latent_codes[data['index']], dim=1, keepdim=True)
-
             total_train_loss += loss.item()
-    
+
         avg_train_loss = total_train_loss / len(train_loader)
         train_loss_history.append(avg_train_loss)
-        print(f'Epoch [{epoch+1}/{config["training"]["num_epochs"]}], Training Loss: {avg_train_loss:.4f}')
-        
-        avg_val_loss = validate_glo(generator, latent_codes, val_loader, device)
+
+        generator.eval()
+        with torch.no_grad():
+            total_val_loss = 0.0
+            for data in val_loader:
+                flux, mask = data['flux'].to(device), data['flux_mask'].to(device)
+                idxs = data['index']
+                batch_latent_codes = torch.stack([latent_codes[idx.item()] for idx in idxs])
+                flux_hat = generator(batch_latent_codes)
+                val_loss = weighted_mse_loss(flux_hat, flux, mask)
+                total_val_loss += val_loss.item()
+
+        avg_val_loss = total_val_loss / len(val_loader)
         val_loss_history.append(avg_val_loss)
-        print(f'Epoch [{epoch+1}/{config["training"]["num_epochs"]}], Validation Loss: {avg_val_loss:.4f}')
 
-        is_best = avg_val_loss < best_val_loss
-        best_val_loss = min(avg_val_loss, best_val_loss)
+        if epoch % 5 == 0:  # Adjust the interval as needed
+            latent_snapshot = {k: v.detach().cpu().numpy() for k, v in latent_codes.items()}
+            latent_code_snapshots.append((epoch, latent_snapshot))
 
-        checkpoint_state = {
-            'epoch': epoch + 1,
-            'state_dict': generator.state_dict(),
-            'latent_codes': latent_codes,
-            'optimizer': optimizer.state_dict(),
-            'best_loss': best_val_loss
-        }
-        save_checkpoint(checkpoint_state, filename=latest_checkpoint_path)
+        print(f'Epoch [{epoch+1}/{config["training"]["num_epochs"]}], Training Loss: {avg_train_loss:.4f}, Validation Loss: {avg_val_loss:.4f}')
 
-        if is_best:
-            save_checkpoint(checkpoint_state, filename=best_checkpoint_path)
+    return generator, latent_codes, train_loss_history, val_loss_history, latent_code_snapshots
 
-        if (epoch + 1) % config['training']['checkpoint_interval'] == 0:
-            save_checkpoint(checkpoint_state, filename=resolve_path(config['paths']['checkpoints']) + f'/checkpoint_epoch_{epoch+1}.pth.tar')
-
-    return generator, latent_codes, train_loss_history, val_loss_history
-
-def plot_loss_history(train_loss_history, val_loss_history, filename='lossGLO.png'):
+def plot_loss_history(train_loss_history, val_loss_history, config):
     plt.figure(figsize=(10, 6))
     plt.plot(range(1, len(train_loss_history) + 1), train_loss_history, label='Training Loss', color='blue')
     plt.plot(range(1, len(val_loss_history) + 1), val_loss_history, label='Validation Loss', color='orange')
@@ -116,55 +72,50 @@ def plot_loss_history(train_loss_history, val_loss_history, filename='lossGLO.pn
     plt.ylabel('Loss')
     plt.title('Training and Validation Loss History')
     plt.legend()
-    plt.savefig(filename)
-    plt.close() 
-    # plt.show()
+    plt.savefig(resolve_path(config['paths']['plots']) + 'loss_history.png')
+    plt.close()
 
-def plot_latent_space(latent_codes, epoch, filename='latent_spaceGLO.png'):
-    latent_codes_np = latent_codes.detach().cpu().numpy()
-    
-    tsne = TSNE(n_components=2, random_state=42)
-    latent_codes_2d = tsne.fit_transform(latent_codes_np)
-    
-    plt.figure(figsize=(10, 6))
-    plt.scatter(latent_codes_2d[:, 0], latent_codes_2d[:, 1], c='blue', s=5)
-    plt.xlabel('t-SNE Component 1')
-    plt.ylabel('t-SNE Component 2')
-    plt.title(f'Latent Space Distribution at Epoch {epoch}')
-    plt.savefig(filename)
-    plt.close() 
-    # plt.show()
+def plot_latent_codes(latent_code_snapshots, config):
+    pca = PCA(n_components=2)
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    for epoch, snapshot in latent_code_snapshots:
+        all_codes = np.array(list(snapshot.values()))
+        pca_result = pca.fit_transform(all_codes)
+        ax.scatter(pca_result[:, 0], pca_result[:, 1], label=f'Epoch {epoch}')
+
+    ax.set_xlabel('PCA Component 1')
+    ax.set_ylabel('PCA Component 2')
+    ax.set_title('PCA of Latent Codes over Epochs')
+    ax.legend()
+    plt.savefig(resolve_path(config['paths']['plots']) + 'latent_code_evolution.png')
+    plt.close()
 
 if __name__ == "__main__":
     config = get_config()
-    
-    os.makedirs(resolve_path(config['paths']['checkpoints']), exist_ok=True)
 
+    os.makedirs(resolve_path(config['paths']['checkpoints']), exist_ok=True)
+    os.makedirs(resolve_path(config['paths']['plots']), exist_ok=True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
-    
+
     hdf5_path = resolve_path(config['paths']['hdf5_data'])
-    num_workers = config['training']['num_workers']
-    
-    train_loader, val_loader, test_loader = get_dataloaders(hdf5_path, config['training']['batch_size'], num_workers, config['training']['split_ratios'])
+    dataset = APOGEEDataset(hdf5_path, max_files=config['training']['max_files'])
+    train_indices, val_indices = train_test_split(list(range(len(dataset))), test_size=config['training']['split_ratios'][1])
 
-    latent_dim = config['training']['latent_dim']
-    num_samples = len(train_loader.dataset) + len(val_loader.dataset) + len(test_loader.dataset)
+    train_dataset = torch.utils.data.Subset(dataset, train_indices)
+    val_dataset = torch.utils.data.Subset(dataset, val_indices)
 
-    # Initialize latent codes for all samples in the dataset
-    latent_codes = torch.randn(num_samples, latent_dim, requires_grad=True, device=device)
+    train_loader = DataLoader(train_dataset, batch_size=config['training']['batch_size'], shuffle=True, num_workers=config['training']['num_workers'])
+    val_loader = DataLoader(val_dataset, batch_size=config['training']['batch_size'], shuffle=False, num_workers=config['training']['num_workers'])
 
     generator_layers = config['model']['generator_layers']
-    output_dim = config['model']['output_dim']
     activation_function = getattr(torch.nn, config['model']['activation_function'])
+    output_dim = next(iter(train_loader))['flux'].size(1)
 
-    # Initialize the generator with the provided parameters
-    generator = Generator(latent_dim, output_dim, generator_layers, activation_function).to(device)
+    generator = Generator(config['training']['latent_dim'], output_dim, generator_layers, activation_function).to(device)
 
-    trained_generator, trained_latent_codes, train_loss_history, val_loss_history = train_glo(generator, latent_codes, train_loader, val_loader, config, device)
+    trained_generator, latent_codes, train_loss_history, val_loss_history, latent_code_snapshots = train_glo(generator, train_loader, val_loader, config, device)
 
-    # Plot the latent space distribution for each epoch
-    for epoch in range(config['training']['num_epochs']):
-        plot_latent_space(trained_latent_codes, epoch, filename=f'latent_space_epoch_{epoch+1}.png')
-
-    plot_loss_history(train_loss_history, val_loss_history, filename='lossGLO.png')
+    plot_loss_history(train_loss_history, val_loss_history, config)
+    plot_latent_codes(latent_code_snapshots, config)

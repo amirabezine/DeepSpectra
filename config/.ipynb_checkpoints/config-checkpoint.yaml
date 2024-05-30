@@ -2,6 +2,7 @@ paths:
   hdf5_data: "data/hdf5/spectra500.hdf5"
   fits_directory: "../../../projects/k-pop/spectra/apogee/dr17"
   checkpoints: "checkpoints/"
+  plots: "plots/"
   tensorboard: "tensorboard/"
 
 training:
