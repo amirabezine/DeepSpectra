@@ -9,22 +9,26 @@ from torch.utils.data import DataLoader
 import os
 import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
+import h5py
+import matplotlib.pyplot as plt
 
 def weighted_mse_loss(input, target, weight):
     assert input.shape == target.shape == weight.shape, f'Shapes of input {input.shape}, target {target.shape}, and weight {weight.shape} must match'
     loss = torch.mean(weight * (input - target) ** 2)
     return loss
 
-def validate_glo(generator, latent_code, dataloader, device):
+def validate_glo(generator, latent_dim, dataloader, device):
     generator.eval()
     total_loss = 0.0
     with torch.no_grad():
         for data in dataloader:
             flux = data['flux'].to(device)
             mask = data['flux_mask'].to(device)
+            batch_size = flux.size(0)
 
-            # Expand latent_code to match the batch size
-            flux_hat = generator(latent_code.expand(data['flux'].size(0), -1))
+            # Generate latent code for the batch
+            latent_code = torch.randn(batch_size, latent_dim, requires_grad=False, device=device)
+            flux_hat = generator(latent_code)
 
             weight = mask  
             loss = weighted_mse_loss(flux_hat, flux, weight)
@@ -63,12 +67,14 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
         for batch_idx, data in enumerate(tqdm(train_loader, total=len(train_loader))):
             flux = data['flux'].to(device)
             mask = data['flux_mask'].to(device)
+            spectrum_index = data['index']
             batch_size = flux.size(0)
 
-            # Step 1: Optimize generator weights
+            # Generate latent code for the batch
             latent_code = torch.randn(batch_size, config['training']['latent_dim'], requires_grad=True, device=device)
-            optimizer_latent = optim.Adam([latent_code], lr=config['training']['learning_rate'])
+            optimizer_latent = optim.Adam([latent_code], lr=config['training']['latent_learning_rate'])
 
+            # Step 1: Optimize generator weights
             generator.train()
             optimizer_weights.zero_grad()
             flux_hat = generator(latent_code)
@@ -89,13 +95,18 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
 
             # Save the optimized latent codes every save_latent_interval epochs
             if (epoch + 1) % save_latent_interval == 0:
-                torch.save(latent_code.detach().cpu(), os.path.join(latent_path, f'latent_epoch_{epoch+1}_batch_{batch_idx+1}.pt'))
+                for i in range(batch_size):
+                    latent_save_path = os.path.join(latent_path, f'latent_epoch_{epoch+1}_batch_{batch_idx+1}_index_{spectrum_index[i].item()}.pt')
+                    torch.save({
+                        'index': spectrum_index[i].item(),
+                        'latent_code': latent_code[i].detach().cpu()
+                    }, latent_save_path)
     
         avg_train_loss = total_train_loss / len(train_loader)
         train_loss_history.append(avg_train_loss)
         print(f'Epoch [{epoch+1}/{config["training"]["num_epochs"]}], Training Loss: {avg_train_loss:.4f}')
         
-        avg_val_loss = validate_glo(generator, latent_code, val_loader, device)
+        avg_val_loss = validate_glo(generator, config['training']['latent_dim'], val_loader, device)
         val_loss_history.append(avg_val_loss)
         print(f'Epoch [{epoch+1}/{config["training"]["num_epochs"]}], Validation Loss: {avg_val_loss:.4f}')
 
@@ -121,7 +132,6 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
     return generator, train_loss_history, val_loss_history
 
 def plot_loss_history(train_loss_history, val_loss_history, config, filename='loss.png'):
-    import matplotlib.pyplot as plt
     plt.figure(figsize=(10, 6))
     plt.plot(range(1, len(train_loss_history) + 1), train_loss_history, label='Training Loss', color='blue')
     plt.plot(range(1, len(val_loss_history) + 1), val_loss_history, label='Validation Loss', color='orange')
@@ -137,15 +147,14 @@ def plot_loss_history(train_loss_history, val_loss_history, config, filename='lo
     plt.show()
 
 def plot_latent_evolution(latent_path, batch_idx, spectrum_idx, num_epochs, config):
-    import matplotlib.pyplot as plt
     latent_vectors = []
-    epochs = range(10, num_epochs + 1, 10)
+    epochs = range(1, num_epochs+1)
     
     for epoch in epochs:
-        latent_file = os.path.join(latent_path, f'latent_epoch_{epoch}_batch_{batch_idx + 1}.pt')
+        latent_file = os.path.join(latent_path, f'latent_epoch_{epoch}_batch_{batch_idx + 1}_index_{spectrum_idx}.pt')
         if os.path.exists(latent_file):
-            latent_code = torch.load(latent_file)
-            latent_vectors.append(latent_code[spectrum_idx].cpu().numpy())
+            latent_data = torch.load(latent_file)
+            latent_vectors.append(latent_data['latent_code'].cpu().numpy())
     
     plt.figure(figsize=(10, 6))
     for i, latent_vector in enumerate(latent_vectors):
@@ -153,7 +162,7 @@ def plot_latent_evolution(latent_path, batch_idx, spectrum_idx, num_epochs, conf
     
     plt.xlabel('Latent Dimension')
     plt.ylabel('Value')
-    plt.title(f'Latent Vector Evolution for Spectrum {spectrum_idx} in Batch {batch_idx + 1}')
+    plt.title(f'Latent Vector Evolution for Spectrum Index {spectrum_idx} in Batch {batch_idx + 1}')
     plt.legend()
     
     plots_path = resolve_path(config['paths']['plots'])
@@ -163,7 +172,6 @@ def plot_latent_evolution(latent_path, batch_idx, spectrum_idx, num_epochs, conf
 
 
 if __name__ == "__main__":
-    
     config = get_config()
     
     os.makedirs(resolve_path(config['paths']['checkpoints']), exist_ok=True)

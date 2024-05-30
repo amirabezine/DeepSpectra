@@ -7,9 +7,9 @@ paths:
   latent: "latent/"
 
 training:
-  num_workers: 10
-  batch_size: 10
-  num_epochs: 50
+  num_workers: 6
+  batch_size: 8
+  num_epochs: 30
   learning_rate: 0.001
   latent_learning_rate: 0.001
   latent_dim: 5
