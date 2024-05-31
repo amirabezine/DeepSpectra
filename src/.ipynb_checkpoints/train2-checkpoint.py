@@ -14,13 +14,7 @@ import matplotlib.pyplot as plt
 
 def weighted_mse_loss(input, target, loss_weight):
     assert input.shape == target.shape == loss_weight.shape, f'Shapes of input {input.shape}, target {target.shape}, and loss weight {loss_weight.shape} must match'
-    
-    # # Ensure loss weights are non-negative
-    # loss_weight = torch.clamp(loss_weight, min=0.0)
-    
-    # # Print loss weight statistics for debugging
-    # print(f"Loss Weight stats - min: {loss_weight.min().item()}, max: {loss_weight.max().item()}, mean: {loss_weight.mean().item()}")
-    
+        
     loss = torch.mean(loss_weight * (input - target) ** 2)
     return loss
 
@@ -32,10 +26,7 @@ def validate_glo(generator, latent_dim, dataloader, device):
             flux = data['flux'].to(device)
             mask = data['flux_mask'].to(device)
             ivar = data['sigma'].to(device)
-            
-            # Clamp ivar to be non-negative
-            ivar = torch.clamp(ivar, min=0.0)
-            
+ 
             batch_size = flux.size(0)
 
             # Generate latent code for the batch
@@ -57,15 +48,15 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
     latest_checkpoint = load_checkpoint(latest_checkpoint_path)
     best_checkpoint = load_checkpoint(best_checkpoint_path)
 
-    optimizer_weights = optim.Adam(generator.parameters(), lr=config['training']['learning_rate'])
-    scheduler_weights = optim.lr_scheduler.StepLR(optimizer_weights, step_size=config['training']['scheduler_step_size'], gamma=config['training']['scheduler_gamma'])
+    optimizer_network = optim.Adam(generator.parameters(), lr=config['training']['learning_rate'])
+    scheduler_network = optim.lr_scheduler.StepLR(optimizer_network, step_size=config['training']['scheduler_step_size'], gamma=config['training']['scheduler_gamma'])
 
     start_epoch = 0
     best_val_loss = float('inf')
     
     if latest_checkpoint:
         generator.load_state_dict(latest_checkpoint['state_dict'])
-        optimizer_weights.load_state_dict(latest_checkpoint['optimizer'])
+        optimizer_network.load_state_dict(latest_checkpoint['optimizer'])
         start_epoch = latest_checkpoint['epoch']
         best_val_loss = latest_checkpoint['best_loss']
     
@@ -80,10 +71,6 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
             flux = data['flux'].to(device)
             mask = data['flux_mask'].to(device)
             ivar = data['sigma'].to(device)
-            
-            # Clamp ivar to be non-negative
-            ivar = torch.clamp(ivar, min=0.0)
-            
             spectrum_index = data['index']
             batch_size = flux.size(0)
 
@@ -91,19 +78,17 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
             latent_code = torch.randn(batch_size, config['training']['latent_dim'], requires_grad=True, device=device)
             optimizer_latent = optim.Adam([latent_code], lr=config['training']['latent_learning_rate'])
 
-            # Step 1: Optimize generator weights
+            # Step 1: Optimize generator network weights
             generator.train()
-            optimizer_weights.zero_grad()
+            optimizer_network.zero_grad()
             flux_hat = generator(latent_code)
             loss_weight = mask * ivar
 
-
-
             loss = weighted_mse_loss(flux_hat, flux, loss_weight)
             loss.backward()
-            optimizer_weights.step()
+            optimizer_network.step()
             
-            # Step 2: Freeze weights and optimize latent vectors
+            # Step 2: Freeze network weights and optimize latent vectors
             generator.eval()
             optimizer_latent.zero_grad()
             flux_hat = generator(latent_code)
@@ -114,13 +99,13 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
             total_train_loss += loss.item()
 
             # Save the optimized latent codes every save_latent_interval epochs
-            if (epoch + 1) % save_latent_interval == 0:
-                for i in range(batch_size):
-                    latent_save_path = os.path.join(latent_path, f'latent_epoch_{epoch+1}_batch_{batch_idx+1}_index_{spectrum_index[i].item()}.pt')
-                    torch.save({
-                        'index': spectrum_index[i].item(),
-                        'latent_code': latent_code[i].detach().cpu()
-                    }, latent_save_path)
+            # if (epoch + 1) % save_latent_interval == 0:
+            for i in range(batch_size):
+                latent_save_path = os.path.join(latent_path, f'latent_epoch_{epoch+1}_batch_{batch_idx+1}_index_{spectrum_index[i].item()}.pt')
+                torch.save({
+                    'index': spectrum_index[i].item(),
+                    'latent_code': latent_code[i].detach().cpu()
+                }, latent_save_path)
     
         avg_train_loss = total_train_loss / len(train_loader)
         train_loss_history.append(avg_train_loss)
@@ -136,7 +121,7 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
         checkpoint_state = {
             'epoch': epoch + 1,
             'state_dict': generator.state_dict(),
-            'optimizer': optimizer_weights.state_dict(),
+            'optimizer': optimizer_network.state_dict(),
             'best_loss': best_val_loss
         }
         save_checkpoint(checkpoint_state, filename=latest_checkpoint_path)
@@ -147,7 +132,7 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
         if (epoch + 1) % config['training']['checkpoint_interval'] == 0:
             save_checkpoint(checkpoint_state, filename=resolve_path(config['paths']['checkpoints']) + f'/checkpoint_epoch_{epoch+1}.pth.tar')
 
-        scheduler_weights.step()
+        scheduler_network.step()
 
     return generator, train_loss_history, val_loss_history
 
@@ -209,12 +194,12 @@ if __name__ == "__main__":
     val_dataset = torch.utils.data.Subset(dataset, val_indices)
 
     train_loader = DataLoader(train_dataset, batch_size=config['training']['batch_size'], shuffle=True, num_workers=num_workers)
-    val_loader = DataLoader(val_dataset, batch_size=config['training']['batch_size'], shuffle=False, num_workers=num_workers)
+    val_loader = DataLoader(val_dataset, batch_size=config['training']['batch_size'], shuffle=True, num_workers=num_workers)
 
     latent_dim = config['training']['latent_dim']
     sample = next(iter(train_loader))
     flux_example = sample['flux'].to(device)
-    wavelength_example = sample['wavelength'].to(device)
+    # wavelength_example = sample['wavelength'].to(device)
     output_dim = flux_example.size(1)
 
     generator_layers = config['model']['generator_layers']
@@ -226,5 +211,4 @@ if __name__ == "__main__":
 
     plot_loss_history(train_loss_history, val_loss_history, config, filename='loss.png')
 
-    # Plot latent evolution for batch index 2 and spectrum number 1
-    plot_latent_evolution(config['paths']['latent'], batch_idx=1, spectrum_idx=0, num_epochs=config['training']['num_epochs'], config=config)
+   

@@ -1,5 +1,5 @@
 paths:
-  hdf5_data: "data/hdf5/spectra500.hdf5"
+  hdf5_data: "data/hdf5/spectra.hdf5"
   fits_directory: "../../../projects/k-pop/spectra/apogee/dr17"
   checkpoints: "checkpoints/"
   plots: "plots/"
@@ -8,8 +8,8 @@ paths:
 
 training:
   num_workers: 6
-  batch_size: 8
-  num_epochs: 30
+  batch_size: 10
+  num_epochs: 40
   learning_rate: 0.001
   latent_learning_rate: 0.001
   latent_dim: 5
@@ -17,7 +17,7 @@ training:
   split_ratios: [0.7, 0.2, 0.1]
   checkpoint_interval: 10
   scheduler_gamma: 30
-  scheduler_step_size: 0.1
+  scheduler_step_size: 0.01
 
 model:
   generator_layers: [256, 512, 1024, 512] 
