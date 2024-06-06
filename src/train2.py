@@ -33,7 +33,7 @@ def validate_glo(generator, latent_dim, dataloader, device):
             latent_code = torch.randn(batch_size, latent_dim, requires_grad=False, device=device)
             flux_hat = generator(latent_code)
 
-            loss_weight = mask * ivar
+            loss_weight = (mask * ivar).detach()  # Ensure loss_weight is not part of the computation graph
             loss = weighted_mse_loss(flux_hat, flux, loss_weight)
             total_loss += loss.item()
     avg_loss = total_loss / len(dataloader)
@@ -82,7 +82,7 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
             generator.train()
             optimizer_network.zero_grad()
             flux_hat = generator(latent_code)
-            loss_weight = mask * ivar
+            loss_weight = (mask * ivar).detach()  # Ensure loss_weight is not part of the computation graph
 
             loss = weighted_mse_loss(flux_hat, flux, loss_weight)
             loss.backward()
@@ -99,7 +99,6 @@ def train_glo(generator, train_loader, val_loader, config, device, save_latent_i
             total_train_loss += loss.item()
 
             # Save the optimized latent codes every save_latent_interval epochs
-            # if (epoch + 1) % save_latent_interval == 0:
             for i in range(batch_size):
                 latent_save_path = os.path.join(latent_path, f'latent_epoch_{epoch+1}_batch_{batch_idx+1}_index_{spectrum_index[i].item()}.pt')
                 torch.save({
@@ -211,4 +210,5 @@ if __name__ == "__main__":
 
     plot_loss_history(train_loss_history, val_loss_history, config, filename='loss.png')
 
-   
+    # Plot latent evolution for batch index 2 and spectrum number 1
+    plot_latent_evolution(config['paths']['latent'], batch_idx=1, spectrum_idx=0, num_epochs=config['training']['num_epochs'], config=config)

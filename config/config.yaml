@@ -1,5 +1,5 @@
 paths:
-  hdf5_data: "data/hdf5/spectra.hdf5"
+  hdf5_data: "data/hdf5/spectra500.hdf5"
   fits_directory: "../../../projects/k-pop/spectra/apogee/dr17"
   checkpoints: "checkpoints/"
   plots: "plots/"
@@ -7,19 +7,19 @@ paths:
   latent: "latent/"
 
 training:
-  num_workers: 6
+  num_workers: 1
   batch_size: 10
-  num_epochs: 40
+  num_epochs: 60
   learning_rate: 0.001
   latent_learning_rate: 0.001
   latent_dim: 5
   max_files: 500
-  split_ratios: [0.7, 0.2, 0.1]
+  split_ratios: [0.8, 0.19, 0.01]
   checkpoint_interval: 10
-  scheduler_gamma: 30
+  scheduler_gamma: 10
   scheduler_step_size: 0.01
 
 model:
-  generator_layers: [256, 512, 1024, 512] 
+  generator_layers: [256, 512, 1024, 512, 256] 
   activation_function: "LeakyReLU"
   output_dim: 8575
