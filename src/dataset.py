@@ -10,6 +10,8 @@ class APOGEEDataset(Dataset):
             if max_files:
                 self.files = self.files[:max_files]
 
+    
+
     def __len__(self):
         return len(self.files)
 
