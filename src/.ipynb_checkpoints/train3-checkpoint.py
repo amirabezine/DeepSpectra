@@ -11,7 +11,7 @@ from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 
 # Custom modules
-from dataset import APOGEEDataset
+from dataset2 import APOGEEDataset
 from model2 import Generator
 from tqdm import tqdm
 from checkpoint import save_checkpoint, load_checkpoint
