@@ -16,22 +16,22 @@ class APOGEEDataset(Dataset):
         return len(self.files)
 
     def __getitem__(self, idx):
-        file = self.files[idx]
-        flux = self.f[file]['flux'][:]
-        wavelength = self.f[file]['wavelength'][:]
-        snr = self.f[file]['snr'][()]
-        flux_mask = self.f[file]['flux_mask'][:]
-        sigma = self.f[file]['sigma'][:]
-        index = self.f[file]['index'][()] 
+        with h5py.File(self.hdf5_file, 'r') as f:
+            file = self.files[idx]
+            flux = f[file]['flux'][:]
+            wavelength = f[file]['wavelength'][:]
+            snr = f[file]['snr'][()]
+            flux_mask = f[file]['flux_mask'][:]
+            sigma = f[file]['sigma'][:]
+            index = f[file]['index'][()]  # Read index
         return {
-            'index': torch.tensor(index, dtype=torch.float32).cuda(),
-            'flux': torch.tensor(flux, dtype=torch.float32).cuda(),
-            'wavelength': torch.tensor(wavelength, dtype=torch.float32).cuda(),
-            'snr': torch.tensor(snr, dtype=torch.float32).cuda(),
-            'flux_mask': torch.tensor(flux_mask, dtype=torch.float32).cuda(),
-            'sigma': torch.tensor(sigma, dtype=torch.float32).cuda()
+            'index': torch.tensor(index, dtype=torch.long),  
+            'flux': torch.tensor(flux, dtype=torch.float32),
+            'wavelength': torch.tensor(wavelength, dtype=torch.float32),
+            'snr': torch.tensor(snr, dtype=torch.float32),
+            'flux_mask': torch.tensor(flux_mask, dtype=torch.float32),
+            'sigma': torch.tensor(sigma, dtype=torch.float32)
         }
-
     def __del__(self):
         self.f.close()
 

@@ -39,7 +39,9 @@ def convert_fits_to_hdf5(fits_dir, hdf5_path, max_files=300, save_interval=10):
     with h5py.File(hdf5_path, 'w') as hdf5_file:
         all_files = [f for f in os.listdir(fits_dir) if f.endswith('.fits')]
         all_files = all_files[:max_files]  # Limit the number of files
-
+        
+        index = 0  # Initialize index counter
+        
         for i in tqdm(range(0, len(all_files), save_interval), desc="Converting FITS to HDF5"):
             for file_index, file_name in enumerate(all_files[i:i+save_interval]):
                 file_path = os.path.join(fits_dir, file_name)
@@ -58,19 +60,21 @@ def convert_fits_to_hdf5(fits_dir, hdf5_path, max_files=300, save_interval=10):
                     flux_mask = create_mask(flux, sigma).astype(np.float32)
 
                     grp = hdf5_file.create_group(file_name)
-                    grp.create_dataset('index', data=file_index)  # Add index dataset
+                    grp.create_dataset('index', data=index)
                     grp.create_dataset('flux', data=flux)
                     grp.create_dataset('wavelength', data=wavelength)
                     grp.create_dataset('snr', data=snr)
                     grp.create_dataset('flux_mask', data=flux_mask)
                     grp.create_dataset('sigma', data=sigma)
                     grp.create_dataset('wavelength_var', data=wavelength_var)
+
+                index += 1 # Increment index counter for each file
             
             hdf5_file.flush()  # Ensure data is written to disk
 
 if __name__ == "__main__":
     convert_fits_to_hdf5(
         "../../../../projects/k-pop/spectra/apogee/dr17", 
-        "../data/hdf5/spectra.hdf5", 
+        "../data/hdf5/spectra600k.hdf5", 
         max_files=600000
     )

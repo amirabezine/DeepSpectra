@@ -62,7 +62,7 @@ def prepare_datasets(config, data_path):
 
 def initialize_models_and_optimizers(config, train_loader, device):
     generator = Generator(config['training']['latent_dim'], config['model']['output_dim'], config['model']['generator_layers'], config['model']['activation_function']).to(device)
-    latent_codes = torch.randn(len(train_loader.dataset), config['training']['latent_dim'], requires_grad=True, device=device)
+    latent_codes = torch.randn(config['training']['max_files'], config['training']['latent_dim'], requires_grad=True, device=device)
 
     optimizer_g = optim.Adam(generator.parameters(), lr=config['training']['learning_rate'])
     optimizer_l = optim.LBFGS([latent_codes], lr=config['training']['latent_learning_rate'])
@@ -120,10 +120,14 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
         train_bar = tqdm(train_loader, desc=f"Training Epoch {epoch + 1}/{num_epochs}")
 
         for batch in train_bar:
-            indices = batch['index'].to(device)
+            indices = batch['index'].to(device, dtype=torch.long)
             flux = batch['flux'].to(device)
             mask = batch['flux_mask'].to(device)
             ivar = batch['sigma'].to(device)
+
+            # Validate index ranges
+            if indices.max() >= len(latent_codes) or indices.min() < 0:
+                raise IndexError(f"Index out of bounds: max index {indices.max()}, min index {indices.min()}, latent codes length {len(latent_codes)}")
 
             # Step 1: Optimize generator weights
             latent_codes.requires_grad_(False)  # Freeze latent codes
@@ -131,7 +135,7 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
             generated = generator(latent_codes[indices])
             loss_g = weighted_mse_loss(generated, flux, mask)
             loss_g.backward()
-            optimizer_g.step()
+            optimizer_g.step()  
             latent_codes.requires_grad_(True)  # Unfreeze latent codes
 
             train_bar.set_postfix({"Batch Weight Loss": loss_g.item()})
@@ -143,10 +147,9 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
             def closure():
                 optimizer_l.zero_grad()
                 generated = generator(latent_codes[indices])
-                # # Apply mask, ASK SEB ABOUT THIS
-                # masked_generated = generated * mask
                 loss_l = weighted_mse_loss(generated, flux, mask)
                 loss_l.backward()
+                
                 epoch_losses.append(loss_l.item())
                 train_bar.set_postfix({"Batch Latent Loss": loss_l.item()})
                 return loss_l
@@ -166,9 +169,13 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
         val_bar = tqdm(val_loader, desc=f"Validation Epoch {epoch + 1}/{num_epochs}")
         with torch.no_grad():
             for batch in val_bar:
-                indices = batch['index'].to(device)
+                indices = batch['index'].to(device, dtype=torch.long)
                 flux = batch['flux'].to(device)
                 mask = batch['flux_mask'].to(device)
+
+                # Validate index ranges
+                if indices.max() >= len(latent_codes) or indices.min() < 0:
+                    raise IndexError(f"Index out of bounds: max index {indices.max()}, min index {indices.min()}, latent codes length {len(latent_codes)}")
 
                 generated = generator(latent_codes[indices])
                 val_loss = weighted_mse_loss(generated, flux, mask)
@@ -179,8 +186,9 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
         loss_history['val'].append(average_val_loss)
         print(f'Epoch {epoch+1} Average Validation Loss: {average_val_loss:.4f}')
 
-        scheduler_g.step()
-        scheduler_l.step()
+        # Step the schedulers
+        scheduler_g.step()  
+        scheduler_l.step()  
 
         checkpoint_state = {
             'epoch': epoch + 1,
@@ -203,7 +211,10 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
 
     np.save(os.path.join(checkpoints_path, 'loss_history.npy'), loss_history)
 
-def plot_losses(loss_history_path):
+
+
+
+def plot_losses(loss_history_path,plots_path):
     loss_history = np.load(loss_history_path, allow_pickle=True).item()
     train_losses = loss_history['train']
     val_losses = loss_history['val']
@@ -220,55 +231,7 @@ def plot_losses(loss_history_path):
 
     # plt.show()
 
-def plot_latent_evolution(latent_dir, spectrum_index, num_epochs, plots_path):
-    latent_evolution = []
 
-    for epoch in range(1, num_epochs + 1):
-        latent_path = os.path.join(latent_dir, f'latent_codes_epoch_{epoch}.npy')
-        latent_data = np.load(latent_path, allow_pickle=True).item()
-        latent_codes = latent_data['latent_codes']
-        latent_evolution.append(latent_codes[spectrum_index])
-
-    latent_evolution = np.array(latent_evolution)
-
-    plt.figure(figsize=(12, 8))
-    for i in range(latent_evolution.shape[1]):
-        plt.plot(latent_evolution[:, i], label=f'Latent Dimension {i + 1}')
-
-    plt.title(f'Evolution of Latent Space for Spectrum Index {spectrum_index}')
-    plt.xlabel('Epoch')
-    plt.ylabel('Latent Value')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(os.path.join(plots_path, f'latent_evolution_{spectrum_index}.png'))
-    # plt.show()
-
-def plot_real_vs_generated(checkpoints_path, latent_path, data_loader, generator, device, spectrum_index, plots_path):
-    latent_files = sorted(os.listdir(latent_path))
-    last_latent_file = os.path.join(latent_path, latent_files[-1])
-    latents = np.load(last_latent_file, allow_pickle=True).item()
-    latent_code = torch.tensor(latents['latent_codes'][spectrum_index]).to(device)
-
-    generator.eval()
-    with torch.no_grad():
-        generated_spectrum = generator(latent_code.unsqueeze(0)).squeeze(0).cpu().numpy()
-
-    for batch in data_loader:
-        indices = batch['index']
-        if spectrum_index in indices:
-            real_spectrum = batch['flux'][indices == spectrum_index].squeeze(0).cpu().numpy()
-            break
-
-    plt.figure(figsize=(10, 5))
-    plt.plot(real_spectrum, label='Real Spectrum', color='blue', alpha=0.8, linewidth=0.8)
-    plt.plot(generated_spectrum, label='Generated Spectrum', color='red', alpha=0.8, linewidth=0.8)
-    plt.title(f'Comparison of Real and Generated Spectra for Spectrum Index {spectrum_index}')
-    plt.xlabel('Wavelength Index')
-    plt.ylabel('Flux')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(os.path.join(plots_path, f'real_vs_generated_{spectrum_index}.png'))
-    # plt.show()
 
 def main():
     print("initializing device ..")
@@ -290,12 +253,10 @@ def main():
     train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, scheduler_g, scheduler_l, train_loader, val_loader, start_epoch, num_epochs, checkpoints_path, latent_path, device, best_val_loss)
 
     print("plotting losses..")
-    plot_losses(os.path.join(plots_path, 'loss_history.npy'))
-    print("plotting latent.. ")
-    plot_latent_evolution(latent_path, 0, 15, plots_path)
-    print("plotting real vs geenrated .. ")
-    plot_real_vs_generated(checkpoints_path, latent_path, train_loader, generator, device, 0, plots_path)
+    plot_losses(os.path.join(checkpoints_path, 'loss_history.npy'),plots_path)
 
+    
+    
     print("done")
 
 if __name__ == "__main__":

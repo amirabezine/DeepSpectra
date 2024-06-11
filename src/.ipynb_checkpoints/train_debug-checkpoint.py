@@ -69,6 +69,7 @@ def initialize_models_and_optimizers(config, train_loader, device):
 
     return generator, latent_codes, optimizer_g, optimizer_l
 
+
 def load_checkpoints(generator, latent_codes, optimizer_g, optimizer_l, checkpoints_path, train_loader, config, device):
     latest_checkpoint_path = os.path.join(checkpoints_path, 'checkpoint_latest.pth.tar')
     best_checkpoint_path = os.path.join(checkpoints_path, 'checkpoint_best.pth.tar')
@@ -108,6 +109,7 @@ def load_checkpoints(generator, latent_codes, optimizer_g, optimizer_l, checkpoi
 
     return start_epoch, scheduler_g, scheduler_l, best_val_loss
 
+
 def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, scheduler_g, scheduler_l, train_loader, val_loader, start_epoch, num_epochs, checkpoints_path, latent_path, device, best_val_loss):
     loss_history = {
         'train': [],
@@ -123,11 +125,6 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
             indices = batch['index'].to(device, dtype=torch.long)
             flux = batch['flux'].to(device)
             mask = batch['flux_mask'].to(device)
-            ivar = batch['sigma'].to(device)
-
-            # Validate index ranges
-            if indices.max() >= len(latent_codes) or indices.min() < 0:
-                raise IndexError(f"Index out of bounds: max index {indices.max()}, min index {indices.min()}, latent codes length {len(latent_codes)}")
 
             # Step 1: Optimize generator weights
             latent_codes.requires_grad_(False)  # Freeze latent codes
@@ -144,17 +141,14 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
             for param in generator.parameters():
                 param.requires_grad = False
 
-            def closure():
-                optimizer_l.zero_grad()
-                generated = generator(latent_codes[indices])
-                loss_l = weighted_mse_loss(generated, flux, mask)
-                loss_l.backward()
-                
-                epoch_losses.append(loss_l.item())
-                train_bar.set_postfix({"Batch Latent Loss": loss_l.item()})
-                return loss_l
+            optimizer_l.zero_grad()
+            generated = generator(latent_codes[indices])
+            loss_l = weighted_mse_loss(generated, flux, mask)
+            loss_l.backward()
+            optimizer_l.step()
 
-            optimizer_l.step(closure)
+            epoch_losses.append(loss_l.item())
+            train_bar.set_postfix({"Batch Latent Loss": loss_l.item()})
 
             # Unfreeze generator weights
             for param in generator.parameters():
@@ -172,11 +166,6 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
                 indices = batch['index'].to(device, dtype=torch.long)
                 flux = batch['flux'].to(device)
                 mask = batch['flux_mask'].to(device)
-
-                # Validate index ranges
-                if indices.max() >= len(latent_codes) or indices.min() < 0:
-                    raise IndexError(f"Index out of bounds: max index {indices.max()}, min index {indices.min()}, latent codes length {len(latent_codes)}")
-
                 generated = generator(latent_codes[indices])
                 val_loss = weighted_mse_loss(generated, flux, mask)
                 val_losses.append(val_loss.item())
@@ -189,6 +178,7 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
         # Step the schedulers
         scheduler_g.step()  
         scheduler_l.step()  
+
 
         checkpoint_state = {
             'epoch': epoch + 1,
@@ -210,7 +200,6 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
         np.save(os.path.join(latent_path, f'latent_codes_epoch_{epoch+1}.npy'), all_latent_data)
 
     np.save(os.path.join(checkpoints_path, 'loss_history.npy'), loss_history)
-
 
 
 
