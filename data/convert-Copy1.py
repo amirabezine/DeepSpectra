@@ -75,6 +75,6 @@ def convert_fits_to_hdf5(fits_dir, hdf5_path, max_files=300, save_interval=10):
 if __name__ == "__main__":
     convert_fits_to_hdf5(
         "../../../../projects/k-pop/spectra/apogee/dr17", 
-        "../data/hdf5/spectra600k.hdf5", 
-        max_files=600000
+        "../data/hdf5/spectra600.hdf5", 
+        max_files=600
     )

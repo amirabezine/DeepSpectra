@@ -125,7 +125,7 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
             mask = batch['flux_mask'].to(device)
 
             # Step 1: Optimize generator weights
-            latent_codes.requires_grad_(False)  # Freeze latent codes
+            latent_codes.requires_grad_(False)  # Freeze latent codes  ####### error probably here
             optimizer_g.zero_grad()
             generated = generator(latent_codes[indices])
             loss_g = weighted_mse_loss(generated, flux, mask)
@@ -137,7 +137,7 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
             for param in generator.parameters():
                 param.requires_grad = False
 
-            latent_codes.requires_grad_(True)  # Unfreeze latent codes
+            latent_codes.requires_grad_(True)  # Unfreeze latent codes   
             optimizer_l.zero_grad()
             generated = generator(latent_codes[indices])
             loss_l = weighted_mse_loss(generated, flux, mask)
@@ -145,13 +145,14 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
             loss_l.backward()
             print("gradient::",latent_codes.grad)
             optimizer_l.step()
-
+            
             for param in generator.parameters():
                 param.requires_grad = True  # Unfreeze generator weights
 
             epoch_losses.append(loss_l.item())
             train_bar.set_postfix({"Batch Latent Loss": loss_l.item()})
-
+            ### print the latent loss
+        
         average_train_loss = np.mean(epoch_losses)
         loss_history['train'].append(average_train_loss)
         print(f'Epoch {epoch+1} Average Train Loss: {average_train_loss:.4f}')

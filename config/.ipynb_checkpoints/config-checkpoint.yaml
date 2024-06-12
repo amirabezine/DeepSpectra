@@ -9,15 +9,15 @@ paths:
 training:
   num_workers: 13
   batch_size: 10
-  num_epochs: 50
-  learning_rate: 0.01
-  latent_learning_rate: 0.01
+  num_epochs: 1000
+  learning_rate: 0.001
+  latent_learning_rate: 0.001
   latent_dim: 5
   max_files: 6000
   split_ratios: [0.8, 0.19, 0.01]
   checkpoint_interval: 10
-  scheduler_gamma: 10
-  scheduler_step_size: 0.01
+  scheduler_gamma: 100
+  scheduler_step_size: 0.1
 
 model:
   generator_layers: [256, 512, 256] 

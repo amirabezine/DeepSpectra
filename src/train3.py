@@ -65,7 +65,7 @@ def initialize_models_and_optimizers(config, train_loader, device):
     latent_codes = torch.randn(config['training']['max_files'], config['training']['latent_dim'], requires_grad=True, device=device)
 
     optimizer_g = optim.Adam(generator.parameters(), lr=config['training']['learning_rate'])
-    optimizer_l = optim.SGD([latent_codes], lr=config['training']['latent_learning_rate'], momentum=0.9)  # Now using SGD
+    optimizer_l = optim.LBFGS([latent_codes], lr=config['training']['latent_learning_rate'])
 
     return generator, latent_codes, optimizer_g, optimizer_l
 
