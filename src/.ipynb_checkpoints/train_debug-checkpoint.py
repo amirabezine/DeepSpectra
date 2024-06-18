@@ -24,8 +24,8 @@ def initialize_device():
 
 def weighted_mse_loss(input, target, weight):
     assert input.shape == target.shape == weight.shape, f'Shapes of input {input.shape}, target {target.shape}, and weight {weight.shape} must match'
-    # loss = torch.mean(weight * (input - target) ** 2) ###uncomment later, debugging
-    loss = torch.mean((input - target) ** 2)
+    loss = torch.mean(weight * (input - target) ** 2) ###uncomment later, debugging
+    # loss = torch.mean((input - target) ** 2)
     return loss
 
 def load_configurations():
@@ -126,6 +126,8 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
             indices = batch['index'].to(device, dtype=torch.long)
             flux = batch['flux'].to(device)
             mask = batch['flux_mask'].to(device)
+            sigma = batch['sigma'].to(device)
+            sigma_safe= sigma**2 + 1e-3
             
             # # Debug: Check latent codes require_grad status
             # print(f"Latent codes require_grad before optimization should be true 1: {latent_codes.requires_grad}")
@@ -138,7 +140,8 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
             optimizer_g.zero_grad()
             generated = generator(latent_codes[indices])
             # print(f"Generated sample outputs: {generated[:5]}")  # Print first few outputs
-            loss_g = weighted_mse_loss(generated, flux, mask)
+            # print(mask/sigma_safe)
+            loss_g = weighted_mse_loss(generated, flux, mask/sigma_safe)
             loss_g.backward()
             optimizer_g.step()  
             epoch_losses_before.append(loss_g.item())
@@ -156,7 +159,7 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
             latent_codes.requires_grad_(True)  # Unfreeze latent codes   
             optimizer_l.zero_grad()
             generated = generator(latent_codes[indices])
-            loss_l = weighted_mse_loss(generated, flux, mask)
+            loss_l = weighted_mse_loss(generated, flux, mask/sigma_safe)
             
             loss_l.backward()
             # Debug: Print gradients of latent codes before optimizer step
@@ -194,9 +197,11 @@ def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, schedu
                 indices = batch['index'].to(device, dtype=torch.long)
                 flux = batch['flux'].to(device)
                 mask = batch['flux_mask'].to(device)
+                sigma = batch['sigma'].to(device)
+                sigma_safe= sigma**2 + 1e-3
 
                 generated = generator(latent_codes[indices])
-                val_loss = weighted_mse_loss(generated, flux, mask)
+                val_loss = weighted_mse_loss(generated, flux, mask/sigma_safe)
                 val_losses.append(val_loss.item())
                 val_bar.set_postfix({"Batch Val Loss": val_loss.item()})
 
@@ -245,6 +250,7 @@ def plot_losses(loss_history_path,plots_path):
     plt.title('Training and Validation Losses Over Epochs')
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
+    # plt.ylim(0,1)
     plt.legend()
     plt.grid(True)
     plt.savefig(os.path.join(plots_path, f'lossesandbeforeopt.png'))
