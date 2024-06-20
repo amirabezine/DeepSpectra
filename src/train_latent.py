@@ -6,16 +6,18 @@ import yaml
 import os
 from datetime import datetime
 import numpy as np
+from utils import get_config2, resolve_path
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
-from utils import get_config, resolve_path
+import h5py
+
+# Custom modules
 from dataset3 import APOGEEDataset
 from model2 import Generator
 from tqdm import tqdm
 from checkpoint import save_checkpoint, load_checkpoint
-import h5py
 
-# Initialize device and configurations
+
 def initialize_device():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -23,16 +25,44 @@ def initialize_device():
 
 def weighted_mse_loss(input, target, weight):
     assert input.shape == target.shape == weight.shape, f'Shapes of input {input.shape}, target {target.shape}, and weight {weight.shape} must match'
-    loss = torch.mean(weight * (input - target) ** 2)
+    loss = torch.mean(weight * (input - target) ** 2) 
+    
     return loss
 
+
+def load_latent_vectors(hdf5_path, dataset_name, latent_dim, indices, device):
+    # Initialize a tensor for latent vectors with zeros for all possible indices.
+    max_index = max(indices)  # Get the maximum index to size the tensor appropriately
+    latent_vectors = torch.zeros(max_index + 1, latent_dim, device=device, requires_grad=True)  # +1 because index starts from 0
+
+    with h5py.File(hdf5_path, 'a') as hdf5_file:
+        for i in indices:
+            unique_id = f"{dataset_name}_{i}"
+            if unique_id in hdf5_file:
+                # Ensure that we are loading the latent vector into the correct position based on the index
+                latent_vectors[i] = torch.tensor(hdf5_file[unique_id]['latent_code'][()], dtype=torch.float32, device=device)
+
+    return latent_vectors
+
+
+def save_latent_vectors_to_hdf5(hdf5_path, dataset_name, latent_vectors, epoch):
+    with h5py.File(hdf5_path, 'a') as hdf5_file:
+        for i, vec in enumerate(latent_vectors):
+            unique_id = f"{dataset_name}_{i}"
+            versioned_key = f"{unique_id}/latent_code_epoch_{epoch}"
+            if versioned_key in hdf5_file:
+                del hdf5_file[versioned_key]  # Remove the old dataset if it exists
+            hdf5_file[versioned_key] = vec.cpu().detach().numpy()  # Create a new dataset
+
+
 def load_configurations():
-    config = get_config()
-    data_path = resolve_path(config['paths']['hdf5_data'])
+    config = get_config2()
+    dataset_name = config['dataset_name']
+    dataset_config = config['datasets'][dataset_name]
+    data_path = resolve_path(dataset_config['path'])
     checkpoints_path = resolve_path(config['paths']['checkpoints'])
     latent_path = resolve_path(config['paths']['latent'])
     plots_path = resolve_path(config['paths']['plots'])
-    tensorboard_path = resolve_path(config['paths']['tensorboard'])
 
     batch_size = config['training']['batch_size']
     num_workers = config['training']['num_workers']
@@ -41,13 +71,17 @@ def load_configurations():
     latent_learning_rate = config['training']['latent_learning_rate']
     latent_dim = config['training']['latent_dim']
     checkpoint_interval = config['training']['checkpoint_interval']
+    max_files=config['training']['max_files']
 
-    return (config, data_path, checkpoints_path, latent_path, plots_path, tensorboard_path,
-            batch_size, num_workers, num_epochs, learning_rate, latent_learning_rate, latent_dim, checkpoint_interval)
+    return (config, data_path, checkpoints_path, latent_path, plots_path,
+            batch_size, num_workers, num_epochs, learning_rate, latent_learning_rate, latent_dim, checkpoint_interval,dataset_name,max_files)
 
-def prepare_datasets(config, data_path):
-    dataset = APOGEEDataset(data_path, max_files=config['training']['max_files'])
-    train_indices, val_indices = train_test_split(list(range(config['training']['max_files'])), test_size=config['training']['split_ratios'][1])
+def prepare_datasets(config, data_path, max_files):
+    print("Starting dataset...")
+    dataset = APOGEEDataset(data_path, max_files)
+    indices = dataset.get_indices()
+    print(f"Loaded: {config['training']['max_files']} .. start split")
+    train_indices, val_indices = train_test_split(list(range(max_files)), test_size=config['training']['split_ratios'][1])
 
     train_dataset = torch.utils.data.Subset(dataset, train_indices)
     val_dataset = torch.utils.data.Subset(dataset, val_indices)
@@ -55,14 +89,18 @@ def prepare_datasets(config, data_path):
     train_loader = DataLoader(train_dataset, batch_size=config['training']['batch_size'], shuffle=True, num_workers=config['training']['num_workers'], pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=config['training']['batch_size'], shuffle=False, num_workers=config['training']['num_workers'], pin_memory=True)
 
-    return train_loader, val_loader
+    return train_loader, val_loader, indices
 
-def initialize_models_and_optimizers(config, train_loader, device):
+def initialize_models_and_optimizers(config, train_loader,latent_codes, device):
     generator = Generator(config['training']['latent_dim'], config['model']['output_dim'], config['model']['generator_layers'], config['model']['activation_function']).to(device)
-    optimizer_g = optim.Adam(generator.parameters(), lr=config['training']['learning_rate'])
-    return generator, optimizer_g
+    # latent_codes = torch.randn(config['training']['max_files'], config['training']['latent_dim'], requires_grad=True, device=device)
 
-def load_checkpoints(generator, optimizer_g, checkpoints_path, train_loader, config, device):
+    optimizer_g = optim.Adam(generator.parameters(), lr=config['training']['learning_rate'])
+    optimizer_l = optim.Adam([latent_codes], lr=config['training']['latent_learning_rate'])
+
+    return generator, optimizer_g, optimizer_l
+
+def load_checkpoints(generator, latent_codes, optimizer_g, optimizer_l, checkpoints_path, train_loader, config, device):
     latest_checkpoint_path = os.path.join(checkpoints_path, 'checkpoint_latest.pth.tar')
     best_checkpoint_path = os.path.join(checkpoints_path, 'checkpoint_best.pth.tar')
 
@@ -70,7 +108,9 @@ def load_checkpoints(generator, optimizer_g, checkpoints_path, train_loader, con
     if latest_checkpoint:
         try:
             generator.load_state_dict(latest_checkpoint['generator_state'])
+            latent_codes.data = latest_checkpoint['latent_codes']
             optimizer_g.load_state_dict(latest_checkpoint['optimizer_g_state'])
+            optimizer_l.load_state_dict(latest_checkpoint['optimizer_l_state'])
             start_epoch = latest_checkpoint['epoch'] + 1  
             print("Loaded latest checkpoint.")
         except KeyError as e:
@@ -78,10 +118,13 @@ def load_checkpoints(generator, optimizer_g, checkpoints_path, train_loader, con
             start_epoch = 0
     else:
         generator.apply(Generator.init_weights)
+        latent_codes = torch.randn(len(train_loader.dataset), config['training']['latent_dim'], device=device, requires_grad=True)
         optimizer_g = torch.optim.Adam(generator.parameters(), lr=config['training']['learning_rate'])
+        optimizer_l = torch.optim.Adam([latent_codes], lr=config['training']['latent_learning_rate'])
         start_epoch = 0
 
     scheduler_g = torch.optim.lr_scheduler.StepLR(optimizer_g, step_size=config['training']['scheduler_step_size'], gamma=config['training']['scheduler_gamma'])
+    scheduler_l = torch.optim.lr_scheduler.StepLR(optimizer_l, step_size=config['training']['scheduler_step_size'], gamma=config['training']['scheduler_gamma'])
 
     best_checkpoint = load_checkpoint(best_checkpoint_path)
     if best_checkpoint:
@@ -94,133 +137,147 @@ def load_checkpoints(generator, optimizer_g, checkpoints_path, train_loader, con
     else:
         best_val_loss = float('inf')
 
-    return start_epoch, scheduler_g, best_val_loss
+    return start_epoch, scheduler_g, scheduler_l, best_val_loss
 
-def load_latent_codes(hdf5_file, keys):
-    latent_codes = {}
-    for key in keys:
-        latent_codes[key] = hdf5_file[key]['latent_code'][:]
-    return latent_codes
-
-def save_latent_codes(hdf5_file, latent_codes):
-    for key, code in latent_codes.items():
-        hdf5_file[key]['latent_code'][:] = code
-
-def train_and_validate(generator, optimizer_g, scheduler_g, train_loader, val_loader, start_epoch, num_epochs, checkpoints_path, latent_path, data_path, device, best_val_loss, config):
+def train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, scheduler_g, scheduler_l, train_loader, val_loader, start_epoch, num_epochs, checkpoints_path, latent_path, device, best_val_loss):
     loss_history = {
         'train': [],
         'val': [],
         'before':[]
     }
 
-    with h5py.File(data_path, 'r+') as hdf5_file:
-        all_keys = list(hdf5_file.keys())
-        latent_codes = load_latent_codes(hdf5_file, all_keys)
+    for epoch in range(start_epoch, num_epochs):
+        generator.train()
+        epoch_losses = []
+        epoch_losses_before =[]
+        train_bar = tqdm(train_loader, desc=f"Training Epoch {epoch + 1}/{num_epochs}")
 
-        for epoch in range(start_epoch, num_epochs):
-            generator.train()
-            epoch_losses = []
-            epoch_losses_before =[]
-            train_bar = tqdm(train_loader, desc=f"Training Epoch {epoch + 1}/{num_epochs}")
+        for batch in train_bar:
+            indices = batch['index'].to(device, dtype=torch.long)  
+            flux = batch['flux'].to(device)
+            mask = batch['flux_mask'].to(device)
+            sigma = batch['sigma'].to(device)
+            sigma_safe= sigma**2 + 1e-3
+            
+            # # Debug: Check latent codes require_grad status
+            # print(f"Latent codes require_grad before optimization should be true 1: {latent_codes.requires_grad}")
 
-            for batch in train_bar:
-               
+
+            # Step 1: Optimize generator weights
+            latent_codes.requires_grad_(False)  # Freeze latent codes  ####### error probably here
+             # Debug: Check latent codes require_grad status
+            # print(f"Latent codes require_grad before optimization should be false 1: {latent_codes.requires_grad}")
+            optimizer_g.zero_grad()
+            generated = generator(latent_codes[indices])
+            # print(f"Generated sample outputs: {generated[:5]}")  # Print first few outputs
+            # print(mask/sigma_safe)
+            loss_g = weighted_mse_loss(generated, flux, mask/sigma_safe)
+            loss_g.backward()
+            optimizer_g.step()  
+            epoch_losses_before.append(loss_g.item())
+            train_bar.set_postfix({"Batch Weight Loss": loss_g.item()})
+            # # Debug: Print gradients of latent codes after optimizing generator
+            # if latent_codes.grad is not None:
+            #     print(f"Gradients of latent codes after generator update: {latent_codes.grad}")
+
+
+            # Step 2: Freeze generator weights and optimize latent codes
+            for param in generator.parameters():
+                param.requires_grad = False
+            # # Debug: Check if latent codes updated
+            # print(f"Latent codes require_grad after optimization should be false 2: {latent_codes.requires_grad}")
+            latent_codes.requires_grad_(True)  # Unfreeze latent codes   
+            optimizer_l.zero_grad()
+            generated = generator(latent_codes[indices])
+            loss_l = weighted_mse_loss(generated, flux, mask/sigma_safe)
+            
+            loss_l.backward()
+            # Debug: Print gradients of latent codes before optimizer step
+            # print(f"Gradients of latent codes before optimizer_l step: {latent_codes.grad}")
+
+            
+            optimizer_l.step()
+            # Debug: Check if latent codes updated
+            # print(f"Latent codes require_grad after optimization should be true2: {latent_codes.requires_grad}")
+
+            
+            for param in generator.parameters():
+                param.requires_grad = True  # Unfreeze generator weights
+
+            epoch_losses.append(loss_l.item())
+            train_bar.set_postfix({"Batch Latent Loss": loss_l.item()})
+            
+            # # Debug: Print latent codes to check updates
+            # if epoch == 2:  # Example: Print only for the first epoch to reduce output
+            #     print(f"Latent codes sample values after update: {latent_codes.data[:5]}")
+
+            
+        average_train_loss_before = np.mean(epoch_losses_before)
+        average_train_loss = np.mean(epoch_losses)
+        loss_history['train'].append(average_train_loss)
+        loss_history['before'].append(average_train_loss_before)
+        print(f'Epoch {epoch+1} Average Train Loss before latent: {average_train_loss_before:.4f}')
+        print(f'Epoch {epoch+1} Average Train Loss after latent: {average_train_loss:.4f}')
+
+        generator.eval()
+        val_losses = []
+        val_bar = tqdm(val_loader, desc=f"Validation Epoch {epoch + 1}/{num_epochs}")
+        with torch.no_grad():
+            for batch in val_bar:
+                indices = batch['index'].to(device, dtype=torch.long)  
                 flux = batch['flux'].to(device)
                 mask = batch['flux_mask'].to(device)
                 sigma = batch['sigma'].to(device)
-                sigma_safe = sigma**2 + 1e-3
-                
-                unique_ids = batch['unique_id']
-                latent_codes_batch = torch.stack([torch.tensor(latent_codes[uid], dtype=torch.float32) for uid in unique_ids]).to(device)
-                latent_codes_batch.requires_grad_(True)
+                sigma_safe= sigma**2 + 1e-3
 
-                # Step 1: Optimize generator weights
-                optimizer_g.zero_grad()
-                generated = generator(latent_codes_batch)
-                loss_g = weighted_mse_loss(generated, flux, mask/sigma_safe)
-                loss_g.backward()
-                optimizer_g.step()  
-                epoch_losses_before.append(loss_g.item())
-                train_bar.set_postfix({"Batch Weight Loss": loss_g.item()})
+                generated = generator(latent_codes[indices])
+                val_loss = weighted_mse_loss(generated, flux, mask/sigma_safe)
+                val_losses.append(val_loss.item())
+                val_bar.set_postfix({"Batch Val Loss": val_loss.item()})
 
-                # Step 2: Optimize latent codes
-                for param in generator.parameters():
-                    param.requires_grad = False
+        average_val_loss = np.mean(val_losses)
+        loss_history['val'].append(average_val_loss)
+        print(f'Epoch {epoch+1} Average Validation Loss: {average_val_loss:.4f}')
 
-                optimizer_l = optim.Adam([latent_codes_batch], lr=config['training']['latent_learning_rate'])
-                optimizer_l.zero_grad()
-                generated = generator(latent_codes_batch)
-                loss_l = weighted_mse_loss(generated, flux, mask/sigma_safe)
-                loss_l.backward()
-                optimizer_l.step()
-                for param in generator.parameters():
-                    param.requires_grad = True  # Unfreeze generator weights
+        # Step the schedulers
+        scheduler_g.step()  
+        scheduler_l.step()  
+        
 
-                # Update latent codes in memory
-                for idx, uid in enumerate(unique_ids):
-                    latent_codes[uid] = latent_codes_batch[idx].detach().cpu().numpy()
+        checkpoint_state = {
+            'epoch': epoch + 1,
+            'state_dict': generator.state_dict(),
+            'latent_codes': latent_codes,
+            'optimizer_g_state': optimizer_g.state_dict(),
+            'optimizer_l_state': optimizer_l.state_dict(),
+            'train_loss': average_train_loss,
+            'val_loss': average_val_loss,
+            'best_loss': best_val_loss
+        }
+        save_checkpoint(checkpoint_state, filename=os.path.join(checkpoints_path, 'checkpoint_latest.pth.tar'))
+        
+        if average_val_loss < best_val_loss:
+            best_val_loss = average_val_loss
+            save_checkpoint(checkpoint_state, filename=os.path.join(checkpoints_path, 'checkpoint_best.pth.tar'))
+        save_checkpoint(checkpoint_state, filename=os.path.join(checkpoints_path, f'checkpoint_epoch_{epoch+1}.pth.tar'))
 
-                epoch_losses.append(loss_l.item())
-                train_bar.set_postfix({"Batch Latent Loss": loss_l.item()})
-                
-            average_train_loss_before = np.mean(epoch_losses_before)
-            average_train_loss = np.mean(epoch_losses)
-            loss_history['train'].append(average_train_loss)
-            loss_history['before'].append(average_train_loss_before)
-            print(f'Epoch {epoch+1} Average Train Loss before latent: {average_train_loss_before:.4f}')
-            print(f'Epoch {epoch+1} Average Train Loss after latent: {average_train_loss:.4f}')
+        all_latent_data = {'latent_codes': latent_codes.detach().cpu().numpy(), 'indices': torch.arange(latent_codes.size(0)).numpy()}
+        np.save(os.path.join(latent_path, f'latent_codes_epoch_{epoch+1}.npy'), all_latent_data)
 
-            generator.eval()
-            val_losses = []
-            val_bar = tqdm(val_loader, desc=f"Validation Epoch {epoch + 1}/{num_epochs}")
-            with torch.no_grad():
-                for batch in val_bar:
-                   
-                    flux = batch['flux'].to(device)
-                    mask = batch['flux_mask'].to(device)
-                    sigma = batch['sigma'].to(device)
-                    sigma_safe = sigma**2 + 1e-3
+        if (epoch + 1) % 20 == 0:
+            print(f"Saving latent vectors for epoch {epoch + 1}")
+            save_latent_vectors_to_hdf5(data_path, dataset_name, latent_codes, epoch + 1)
+            print(f"Latent vectors saved for epoch {epoch + 1}")
 
-                    unique_ids = batch['unique_id']
-                    latent_codes_batch = torch.stack([torch.tensor(latent_codes[uid], dtype=torch.float32) for uid in unique_ids]).to(device)
+    np.save(os.path.join(checkpoints_path, 'loss_history.npy'), loss_history)
 
-                    generated = generator(latent_codes_batch)
-                    val_loss = weighted_mse_loss(generated, flux, mask/sigma_safe)
-                    val_losses.append(val_loss.item())
-                    val_bar.set_postfix({"Batch Val Loss": val_loss.item()})
 
-            average_val_loss = np.mean(val_losses)
-            loss_history['val'].append(average_val_loss)
-            print(f'Epoch {epoch+1} Average Validation Loss: {average_val_loss:.4f}')
 
-            # Step the scheduler
-            scheduler_g.step()  
-            
-            # Save checkpoints
-            checkpoint_state = {
-                'epoch': epoch + 1,
-                'state_dict': generator.state_dict(),
-                'optimizer_g_state': optimizer_g.state_dict(),
-                'train_loss': average_train_loss,
-                'val_loss': average_val_loss,
-                'best_loss': best_val_loss
-            }
-            save_checkpoint(checkpoint_state, filename=os.path.join(checkpoints_path, 'checkpoint_latest.pth.tar'))
-            if average_val_loss < best_val_loss:
-                best_val_loss = average_val_loss
-                save_checkpoint(checkpoint_state, filename=os.path.join(checkpoints_path, 'checkpoint_best.pth.tar'))
-            save_checkpoint(checkpoint_state, filename=os.path.join(checkpoints_path, f'checkpoint_epoch_{epoch+1}.pth.tar'))
-
-            # Save latent codes back to HDF5 file at the end of each epoch
-            save_latent_codes(hdf5_file, latent_codes)
-
-        np.save(os.path.join(checkpoints_path, 'loss_history.npy'), loss_history)
-
-def plot_losses(loss_history_path, plots_path):
+def plot_losses(loss_history_path,plots_path):
     loss_history = np.load(loss_history_path, allow_pickle=True).item()
     train_losses = loss_history['train']
     val_losses = loss_history['val']
-    before_losses = loss_history['before']
+    before_losses= loss_history['before']
 
     plt.figure(figsize=(10, 5))
     plt.plot(train_losses, label='Training Loss')
@@ -229,21 +286,46 @@ def plot_losses(loss_history_path, plots_path):
     plt.title('Training and Validation Losses Over Epochs')
     plt.xlabel('Epochs')
     plt.ylabel('Loss')
+    # plt.ylim(0,1)
     plt.legend()
     plt.grid(True)
     plt.savefig(os.path.join(plots_path, f'lossesandbeforeopt.png'))
 
+    # plt.show()
+
+
+
 def main():
+    print("initializing device ..")
     device = initialize_device()
-    (config, data_path, checkpoints_path, latent_path, plots_path, tensorboard_path,
-     batch_size, num_workers, num_epochs, learning_rate, latent_learning_rate, latent_dim, checkpoint_interval) = load_configurations()
 
-    train_loader, val_loader = prepare_datasets(config, data_path)
-    generator, optimizer_g = initialize_models_and_optimizers(config, train_loader, device)
-    start_epoch, scheduler_g, best_val_loss = load_checkpoints(generator, optimizer_g, checkpoints_path, train_loader, config, device)
+    
+    print("loading config..")
+    (config, data_path, checkpoints_path, latent_path, plots_path, 
+     batch_size, num_workers, num_epochs, learning_rate, latent_learning_rate, latent_dim, checkpoint_interval, dataset_name, max_files) = load_configurations()
 
-    train_and_validate(generator, optimizer_g, scheduler_g, train_loader, val_loader, start_epoch, num_epochs, checkpoints_path, latent_path, data_path, device, best_val_loss, config)
-    plot_losses(os.path.join(checkpoints_path, 'loss_history.npy'), plots_path)
+    
+    print("preparing datasets")
+    train_loader, val_loader, indices = prepare_datasets(config, data_path,max_files)
+
+    print("loading latent codes..")
+    latent_codes = load_latent_vectors(data_path, dataset_name, latent_dim, indices, device)
+    
+    print("initializing models and optimizers..")
+    generator, optimizer_g, optimizer_l = initialize_models_and_optimizers(config, train_loader,latent_codes, device)
+
+    print("loading checkpoints..")
+    start_epoch, scheduler_g, scheduler_l, best_val_loss = load_checkpoints(generator, latent_codes, optimizer_g, optimizer_l, checkpoints_path, train_loader, config, device)
+
+    print("start training and validation..")
+    train_and_validate(generator, latent_codes, optimizer_g, optimizer_l, scheduler_g, scheduler_l, train_loader, val_loader, start_epoch, num_epochs, checkpoints_path, latent_path, device, best_val_loss)
+
+    print("plotting losses..")
+    plot_losses(os.path.join(checkpoints_path, 'loss_history.npy'),plots_path)
+
+    
+    
+    print("done")
 
 if __name__ == "__main__":
     main()

@@ -9,22 +9,26 @@ class APOGEEDataset(Dataset):
         self.files = list(self.f.keys())
         if max_files:
             self.files = self.files[:max_files]
+        self.indices = self.get_indices()
 
     def __len__(self):
         return len(self.files)
 
     def __getitem__(self, idx):
-        with h5py.File(self.hdf5_file, 'r') as f:
-            file = self.files[idx]
-            flux = f[file]['flux'][:]
-            wavelength = f[file]['wavelength'][:]
-            snr = f[file]['snr'][()]
-            flux_mask = f[file]['flux_mask'][:]
-            sigma = f[file]['sigma'][:]
-            unique_id = f[file]['unique_id'][()]  # Read unique ID
-            latent_code = f[file]['latent_code'][:]  # Read latent code
+        file = self.files[idx]
+        
+        flux = self.f[file]['flux'][:]
+        wavelength = self.f[file]['wavelength'][:]
+        snr = self.f[file]['snr'][()]
+        flux_mask = self.f[file]['flux_mask'][:]
+        sigma = self.f[file]['sigma'][:]
+        unique_id = self.f[file]['unique_id'][()]  # Read unique ID
+        latent_code = self.f[file]['latent_code'][:]  # Read latent code
+        index = self.f[file]['index'][()] 
+        
         return {
             'unique_id': unique_id,
+            'index': torch.tensor(index, dtype=torch.long),
             'flux': torch.tensor(flux, dtype=torch.float32),
             'wavelength': torch.tensor(wavelength, dtype=torch.float32),
             'snr': torch.tensor(snr, dtype=torch.float32),
@@ -35,6 +39,14 @@ class APOGEEDataset(Dataset):
 
     def __del__(self):
         self.f.close()
+
+    def get_indices(self):
+        indices = []
+        for file in self.files:
+            indices.append(self.f[file]['index'][()])
+        return indices
+
+
 
 def get_dataloaders(hdf5_file, batch_size, num_workers, split_ratios):
     dataset = APOGEEDataset(hdf5_file)

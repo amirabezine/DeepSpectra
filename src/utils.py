@@ -10,6 +10,13 @@ def get_config():
         config = yaml.safe_load(f)
     return config
 
+
+def get_config2():
+    config_path = os.path.join(get_project_root(), 'config', 'config2.yaml')
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    return config
+
 def resolve_path(path):
     return os.path.join(get_project_root(), path)
 

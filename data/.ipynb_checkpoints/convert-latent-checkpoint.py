@@ -31,7 +31,7 @@ def get_snr(hdul):
         return 0
 
 def convert_fits_to_hdf5(fits_dir, hdf5_path, dataset_name, latent_size, max_files=300, save_interval=10):
-    with h5py.File(hdf5_path, 'w') as hdf5_file:
+    with h5py.File(hdf5_path, 'a') as hdf5_file:  # Change mode to 'a' to append/modify existing file
         all_files = [f for f in os.listdir(fits_dir) if f.endswith('.fits')]
         all_files = all_files[:max_files]
         
@@ -47,31 +47,31 @@ def convert_fits_to_hdf5(fits_dir, hdf5_path, dataset_name, latent_size, max_fil
                     snr = get_snr(hdul)
                     sigma = hdul[2].data.astype(np.float32)
                     wavelength_var = calculate_wavelength(header, sigma).astype(np.float32)
-
+                
                     flux = ensure_native_byteorder(flux)
                     sigma = ensure_native_byteorder(sigma)
                     wavelength = ensure_native_byteorder(wavelength)
-
                     flux_mask = create_mask(flux, sigma).astype(np.float32)
-
+                    
                     unique_id = f"{dataset_name}_{index}"
 
                     latent_code = torch.normal(0, 0.01, size=(latent_size,), dtype=torch.float32).numpy()
 
-                    grp = hdf5_file.create_group(file_name)
+                    # Use unique_id as the key for the group
+                    grp = hdf5_file.require_group(unique_id)  # Ensure group exists, otherwise create it
                     grp.create_dataset('index', data=index)
-                    grp.create_dataset('flux', data=flux)
-                    grp.create_dataset('wavelength', data=wavelength)
+                    grp.create_dataset('flux', data=flux, compression="gzip", compression_opts=9)
+                    grp.create_dataset('wavelength', data=wavelength, compression="gzip", compression_opts=9)
                     grp.create_dataset('snr', data=snr)
                     grp.create_dataset('flux_mask', data=flux_mask)
-                    grp.create_dataset('sigma', data=sigma)
-                    grp.create_dataset('wavelength_var', data=wavelength_var)
-                    grp.create_dataset('unique_id', data=unique_id)  # Add unique ID
-                    grp.create_dataset('latent_code', data=latent_code)  # Add latent code
+                    grp.create_dataset('sigma', data=sigma, compression="gzip", compression_opts=9)
+                    grp.create_dataset('wavelength_var', data=wavelength_var, compression="gzip", compression_opts=9)
+                    grp.create_dataset('latent_code', data=latent_code)  # Store latent code
 
                 index += 1
             
             hdf5_file.flush()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert FITS files to HDF5 with latent codes")

@@ -28,6 +28,16 @@ def weighted_mse_loss(input, target, weight):
     # loss = torch.mean((input - target) ** 2)
     return loss
 
+
+def load_latent_vectors(hdf5_path, dataset_name, max_files, latent_dim, device):
+    latent_vectors = torch.randn(max_files, latent_dim, device=device, requires_grad=True)
+    with h5py.File(hdf5_path, 'a') as hdf5_file:
+        for i in range(max_files):
+            unique_id = f"{dataset_name}_{i}"
+            if unique_id in hdf5_file:
+                latent_vectors[i] = torch.tensor(hdf5_file[unique_id]['latent_code'][()], dtype=torch.float32, device=device)
+    return latent_vectors
+
 def load_configurations():
     config = get_config()
     data_path = resolve_path(config['paths']['hdf5_data'])
