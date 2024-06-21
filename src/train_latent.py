@@ -59,8 +59,10 @@ def load_latent_vectors(hdf5_path, loaders, latent_dim, device):
 def save_latent_vectors_to_hdf5(hdf5_path, dict_latent_codes, latent_vectors, epoch):
     with h5py.File(hdf5_path, 'a') as hdf5_file:
         for unique_id, index in dict_latent_codes.items():
-            versioned_key = f"{unique_id}/latent_code_epoch_{epoch}"
-            print(versioned_key)
+            decoded_id = unique_id.decode('utf-8') if isinstance(unique_id, bytes) else unique_id
+            versioned_key = f"{decoded_id}/optimized_latent_code/epoch_{epoch}"
+            # versioned_key = f"{unique_id}/latent_code_epoch_{epoch}"
+            # print(versioned_key)
             if versioned_key in hdf5_file:
                 del hdf5_file[versioned_key]  # Remove the old dataset if it exists
             hdf5_file[versioned_key] = latent_vectors[index].cpu().detach().numpy()  # Create a new dataset
@@ -70,7 +72,9 @@ def save_latent_vectors_to_hdf5(hdf5_path, dict_latent_codes, latent_vectors, ep
 def save_last_latent_vectors_to_hdf5(hdf5_path, dict_latent_codes, latent_vectors):
     with h5py.File(hdf5_path, 'a') as hdf5_file:
         for unique_id, index in dict_latent_codes.items():
-            versioned_key = f"{unique_id}/latent_code"
+            decoded_id = unique_id.decode('utf-8') if isinstance(unique_id, bytes) else unique_id
+            
+            versioned_key = f"{decoded_id}/optimized_latent_code/latest"
             if versioned_key in hdf5_file:
                 del hdf5_file[versioned_key]  # Remove the old dataset if it exists
             hdf5_file[versioned_key] = latent_vectors[index].cpu().detach().numpy()  # Create a new dataset
@@ -237,17 +241,6 @@ def train_and_validate(generator, latent_codes, dict_latent_codes, optimizer_g, 
         scheduler_g.step()
         scheduler_l.step()
 
-        # Save checkpoints and latent vectors
-        # checkpoint_state = {
-        #     'epoch': epoch + 1,
-        #     'generator_state_dict': generator.state_dict(),
-        #     'latent_codes': latent_codes,
-        #     'optimizer_g_state': optimizer_g.state_dict(),
-        #     'optimizer_l_state': optimizer_l.state_dict(),
-        #     'train_loss': average_train_loss,
-        #     'val_loss': average_val_loss,
-        #     'best_loss': best_val_loss
-        # }
 
         checkpoint_state = {
             'epoch': epoch + 1,
