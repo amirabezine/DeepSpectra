@@ -6,14 +6,14 @@ paths:
 training:
   num_workers: 13
   batch_size: 10
-  num_epochs: 50
+  num_epochs: 15
   learning_rate: 0.001
   latent_learning_rate: 0.001
-  latent_dim: 5
+  latent_dim: 20
   max_files: 1000
   split_ratios: [0.8, 0.19, 0.01]
   checkpoint_interval: 10
-  scheduler_gamma: 100
+  scheduler_gamma: 30
   scheduler_step_size: 0.1
 
 model:
@@ -22,10 +22,10 @@ model:
   output_dim: 8575
 
 
-dataset_name: "apogee"  # or "galah" or "boss"
+dataset_name: "apogee_dr17"  # or "galah" or "boss"
 
 datasets:
-  apogee:
+  apogee_dr17:
     type: 'StellarDataset'
     path: 'data/hdf5/apogee1000.hdf5'
     fits_directory: "../../../projects/k-pop/spectra/apogee/dr17"

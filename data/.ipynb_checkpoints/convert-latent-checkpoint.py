@@ -59,6 +59,7 @@ def convert_fits_to_hdf5(fits_dir, hdf5_path, dataset_name, latent_size, max_fil
 
                     # Use unique_id as the key for the group
                     grp = hdf5_file.require_group(unique_id)  # Ensure group exists, otherwise create it
+                    grp.create_dataset('unique_id', data=unique_id)
                     grp.create_dataset('index', data=index)
                     grp.create_dataset('flux', data=flux, compression="gzip", compression_opts=9)
                     grp.create_dataset('wavelength', data=wavelength, compression="gzip", compression_opts=9)
