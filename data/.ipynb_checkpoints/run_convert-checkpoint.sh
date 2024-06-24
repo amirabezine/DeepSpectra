@@ -2,10 +2,10 @@
 
 
 FITS_DIR="../../../../projects/k-pop/spectra/apogee/dr17"
-HDF5_PATH="../data/hdf5/apogee3000.hdf5"
+HDF5_PATH="../data/hdf5/apogee4000.hdf5"
 DATASET_NAME="apogee_dr17"
 LATENT_SIZE=20
-MAX_FILES=3000
+MAX_FILES=4000
 
 
 
