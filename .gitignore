@@ -3,3 +3,4 @@ logs/*
 checkpoints/*
 tensorboard/*
 latent/*
+data/test/*
