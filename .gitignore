@@ -4,3 +4,5 @@ checkpoints/*
 tensorboard/*
 latent/*
 data/test/*
+data/test2/*
+
