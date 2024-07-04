@@ -65,7 +65,7 @@ class IterableSpectraDataset(IterableDataset):
                 metadata = {
                     'dec': group['dec'][()],
                     'instrument_type': group['instrument_type'][()].decode('utf-8'),
-                    'instruments': group['instruments'][()].decode('utf-8'),
+                    'instruments': group['instruments'][()],  # Keep as numpy array
                     'logg': group['logg'][()],
                     'logg_err': group['logg_err'][()],
                     'obj_class': group['obj_class'][()].decode('utf-8'),
@@ -99,29 +99,29 @@ def get_dataloaders(hdf5_dir, batch_size=32, n_samples_per_spectrum=500, validat
 
     return train_loader, val_loader
 
-# Example usage
-if __name__ == "__main__":
-    hdf5_dir = '../data/healpixfiles'
-    train_loader, val_loader = get_dataloaders(hdf5_dir)
+# # Example usage
+# if __name__ == "__main__":
+#     hdf5_dir = '../data/healpixfiles'
+#     train_loader, val_loader = get_dataloaders(hdf5_dir)
 
-    # Example of iterating through the training data
-    for batch in train_loader:
-        unique_ids = batch['unique_id']
-        fluxes = batch['flux']
-        wavelengths = batch['wavelength']
-        sigmas = batch['sigma']
-        masks = batch['mask']
-        latent_codes = batch['latent_code']
-        metadatas = batch['metadata']
+#     # Example of iterating through the training data
+#     for batch in train_loader:
+#         unique_ids = batch['unique_id']
+#         fluxes = batch['flux']
+#         wavelengths = batch['wavelength']
+#         sigmas = batch['sigma']
+#         masks = batch['mask']
+#         latent_codes = batch['latent_code']
+#         metadatas = batch['metadata']
 
-        print(f"Batch size: {len(unique_ids)}")
-        print(f"Flux shape: {fluxes.shape}")
-        print(f"Wavelength shape: {wavelengths.shape}")
-        print(f"Sigma shape: {sigmas.shape}")
-        print(f"Mask shape: {masks.shape}")
-        print(f"Latent code shape: {latent_codes.shape}")
-        print(f"First spectrum ID: {unique_ids[0]}")
-        print(f"First spectrum temperature: {metadatas[0]['temp']}")
+#         print(f"Batch size: {len(unique_ids)}")
+#         print(f"Flux shape: {fluxes.shape}")
+#         print(f"Wavelength shape: {wavelengths.shape}")
+#         print(f"Sigma shape: {sigmas.shape}")
+#         print(f"Mask shape: {masks.shape}")
+#         print(f"Latent code shape: {latent_codes.shape}")
+#         print(f"First spectrum ID: {unique_ids[0]}")
+#         print(f"First spectrum temperature: {metadatas[0]['temp']}")
 
-        # Break after first batch for this example
-        break
+#         # Break after first batch for this example
+#         break
