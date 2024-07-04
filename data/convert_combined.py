@@ -5,6 +5,14 @@ import os
 from tqdm import tqdm
 import torch
 import argparse
+import healpy as hp
+
+
+def get_healpix_index(ra, dec, nside):
+    theta = np.radians(90 - dec)
+    phi = np.radians(ra)
+    return hp.ang2pix(nside, theta, phi)
+
 
 def load_galah_catalog(catalog_path):
     with fits.open(catalog_path) as hdul:
@@ -78,39 +86,47 @@ def extract_galah_metadata(galah_catalog, sobject_id):
         }
     return None
     
-def save_to_hdf5(flux, wavelength, sigma, flux_mask, unique_id, instrument_type, hdf5_file, index, latent_size, combined_meta):
+def save_to_hdf5(flux, wavelength, sigma, flux_mask, unique_id, instrument_type, hdf5_dir, index, latent_size, combined_meta, healpix_index):
+    hdf5_path = os.path.join(hdf5_dir, f"spectra_healpix_{healpix_index}.hdf5")
     latent_code = torch.normal(0, 1, size=(latent_size,), dtype=torch.float32).numpy()
-    grp = hdf5_file.create_group(unique_id)
-    grp.create_dataset('flux', data=flux, compression="gzip", compression_opts=9)
-    grp.create_dataset('wavelength', data=wavelength, compression="gzip", compression_opts=9)
-    grp.create_dataset('sigma', data=sigma, compression="gzip", compression_opts=9)
-    grp.create_dataset('flux_mask', data=flux_mask)
-    grp.create_dataset('latent_code', data=latent_code)
-    grp.create_dataset('instrument_type', data=np.string_(instrument_type))
     
-    # Handle metadata
-    for key, value in combined_meta.items():
-        try:
-            if value is None:
-                # Assuming all None values can be stored as np.nan in the dataset
-                grp.create_dataset(key, data=np.array([np.nan], dtype=np.float32))
-            elif isinstance(value, list):
-                # Convert None to np.nan for float compatibility in HDF5
-                clean_value = [np.nan if v is None else v for v in value]
-                grp.create_dataset(key, data=np.array(clean_value, dtype=np.float32))
-            elif isinstance(value, (int, float)):
-                # Single numeric values
-                grp.create_dataset(key, data=np.float32(value))
-            elif isinstance(value, str):
-                # Single string values
-                grp.create_dataset(key, data=np.string_(value))
-            elif isinstance(value, np.ndarray):
-                # Directly handle numpy arrays (for instruments)
-                grp.create_dataset(key, data=value, dtype=value.dtype)
-            else:
-                print(f"Unsupported data type for key {key}: {type(value)}")
-        except Exception as e:
-            print(f"Error while saving {key}: {str(e)}")
+    with h5py.File(hdf5_path, 'a') as hdf5_file:
+        # Check if the group already exists, if not create it
+        if unique_id in hdf5_file:
+            grp = hdf5_file[unique_id]
+        else:
+            grp = hdf5_file.create_group(unique_id)
+
+        grp.create_dataset('flux', data=flux, compression="gzip", compression_opts=9)
+        grp.create_dataset('wavelength', data=wavelength, compression="gzip", compression_opts=9)
+        grp.create_dataset('sigma', data=sigma, compression="gzip", compression_opts=9)
+        grp.create_dataset('flux_mask', data=flux_mask)
+        grp.create_dataset('latent_code', data=latent_code)
+        grp.create_dataset('instrument_type', data=np.string_(instrument_type))
+        
+        # Handle metadata
+        for key, value in combined_meta.items():
+            try:
+                if value is None:
+                    # Assuming all None values can be stored as np.nan in the dataset
+                    grp.create_dataset(key, data=np.array([np.nan], dtype=np.float32))
+                elif isinstance(value, list):
+                    # Convert None to np.nan for float compatibility in HDF5
+                    clean_value = [np.nan if v is None else v for v in value]
+                    grp.create_dataset(key, data=np.array(clean_value, dtype=np.float32))
+                elif isinstance(value, (int, float)):
+                    # Single numeric values
+                    grp.create_dataset(key, data=np.float32(value))
+                elif isinstance(value, str):
+                    # Single string values
+                    grp.create_dataset(key, data=np.string_(value))
+                elif isinstance(value, np.ndarray):
+                    # Directly handle numpy arrays (for instruments)
+                    grp.create_dataset(key, data=value, dtype=value.dtype)
+                else:
+                    print(f"Unsupported data type for key {key}: {type(value)}")
+            except Exception as e:
+                print(f"Error while saving {key}: {str(e)}")
 
 
 
@@ -183,7 +199,7 @@ def load_galah_spectrum(galah_dir, galah_id):
 
 
 
-def process_spectra(apogee_dir, galah_dir, apogee_ids, galah_ids, hdf5_file, latent_size, catalog_path):
+def process_spectra(apogee_dir, galah_dir, apogee_ids, galah_ids, hdf5_dir, latent_size, catalog_path, nside):
     index = 0
     processed_apogee = set()
     processed_galah = set()
@@ -233,8 +249,11 @@ def process_spectra(apogee_dir, galah_dir, apogee_ids, galah_ids, hdf5_file, lat
                 'obj_class' : "Star"
             }
 
+            ra = combined_meta['ra'][0] if combined_meta['ra'][0] is not None else combined_meta['ra'][1]
+            dec = combined_meta['dec'][0] if combined_meta['dec'][0] is not None else combined_meta['dec'][1]
+            healpix_index = get_healpix_index(ra, dec, nside)
 
-            unique_id = f"{instrument_type}_{index}"
+            unique_id = f"{healpix_index}_{instrument_type}_{index}"
             index += 1
 
             if apogee_exists:
@@ -246,8 +265,8 @@ def process_spectra(apogee_dir, galah_dir, apogee_ids, galah_ids, hdf5_file, lat
             continue
 
        
-
-        save_to_hdf5(flux, wavelength, sigma, flux_mask, unique_id, instrument_type, hdf5_file, index, latent_size, combined_meta)
+        save_to_hdf5(flux, wavelength, sigma, flux_mask, unique_id, instrument_type, hdf5_dir, index, latent_size, combined_meta, healpix_index)
+ 
 
         
 
@@ -259,7 +278,7 @@ def process_spectra(apogee_dir, galah_dir, apogee_ids, galah_ids, hdf5_file, lat
         apogee_file = os.path.join(apogee_dir, f"aspcapStar-dr17-{apogee_id}.fits")
         print("apogee file " , apogee_file)
         flux, wavelength, sigma, flux_mask, instruments = load_apogee_spectrum(apogee_file)
-        unique_id = f"apogee_{index}"
+        
         instrument_type = "apogee"
         index += 1
 
@@ -275,30 +294,39 @@ def process_spectra(apogee_dir, galah_dir, apogee_ids, galah_ids, hdf5_file, lat
             'rv': [apogee_meta['rv'], None],
             'rv_err': [apogee_meta['rv_err'], None],
 
-            'ra': apogee_meta['ra'],
-            'dec': apogee_meta['dec'],
+            'ra': [apogee_meta['ra'], None],
+            'dec': [apogee_meta['dec'], None],
             'instruments': instruments,
             'obj_class' : "Star"
             
         }
 
-
-        save_to_hdf5(flux, wavelength, sigma, flux_mask,  unique_id, instrument_type, hdf5_file, index, latent_size, combined_meta)
+        ra = combined_meta['ra'][0] 
+        dec = combined_meta['dec'][0] 
+        healpix_index = get_healpix_index(ra, dec, nside)
+        
+        unique_id = f"{healpix_index}_{instrument_type}_{index}"
+        
+        save_to_hdf5(flux, wavelength, sigma, flux_mask, unique_id, instrument_type, hdf5_dir, index, latent_size, combined_meta, healpix_index)
+        
     print("finished APOGEE")
+
+
+    
     # Process remaining GALAH files
     all_galah_files = {int(file[:15]) for file in os.listdir(galah_dir) if file.endswith('.fits')}
     remaining_galah = all_galah_files - processed_galah
-    print("all_galah_files = " ,all_galah_files)
-    print("----------------------------------------")
-    print("remaining_galah= ", remaining_galah)
-    print("----------------------------------------")
-    print("processed_galah", processed_galah)
-    print("----------------------------------------")
+    # print("all_galah_files = " ,all_galah_files)
+    # print("----------------------------------------")
+    # print("remaining_galah= ", remaining_galah)
+    # print("----------------------------------------")
+    # print("processed_galah", processed_galah)
+    # print("----------------------------------------")
     for galah_id in remaining_galah:
         try:
             # print("looking for galah id remaining: " , galah_id)
             flux, wavelength, sigma, flux_mask, instruments = load_galah_spectrum(galah_dir, galah_id)
-            unique_id = f"galah_{index}"
+            
             instrument_type = "galah"
             index += 1
             print("working on  galah : " , galah_id)
@@ -322,8 +350,12 @@ def process_spectra(apogee_dir, galah_dir, apogee_ids, galah_ids, hdf5_file, lat
                 'obj_class' : "Star"
             }
 
-
-            save_to_hdf5(flux, wavelength, sigma, flux_mask, unique_id, instrument_type, hdf5_file, index, latent_size, combined_meta)
+            ra = combined_meta['ra'][1] 
+            dec = combined_meta['dec'][1] 
+            healpix_index = get_healpix_index(ra, dec, nside)
+            unique_id = f"{healpix_index}_{instrument_type}_{index}"
+        
+            save_to_hdf5(flux, wavelength, sigma, flux_mask, unique_id, instrument_type, hdf5_dir, index, latent_size, combined_meta, healpix_index)
 
         except ValueError as e:
             print(f"Skipping {galah_id}: {str(e)}")
@@ -336,14 +368,19 @@ if __name__ == "__main__":
     parser.add_argument('--apogee_dir', type=str, required=True, help="Directory containing APOGEE FITS files")
     parser.add_argument('--galah_dir', type=str, required=True, help="Directory containing GALAH FITS files")
     parser.add_argument('--combined_file', type=str, required=True, help="Path to combined FITS catalog")
-    parser.add_argument('--hdf5_path', type=str, required=True, help="Path to output HDF5 file")
+    # parser.add_argument('--hdf5_path', type=str, required=True, help="Path to output HDF5 file")
     parser.add_argument('--latent_size', type=int, default=10, help="Size of the latent code")
     parser.add_argument('--catalog_path', type=str, required=True, help="Path to Galah catalog fits file")
+    parser.add_argument('--hdf5_dir', type=str, required=True, help="Directory to output HDF5 files")
+    parser.add_argument('--nside', type=int, default=32, help="HEALPix NSIDE parameter")
 
     args = parser.parse_args()
-    with h5py.File(args.hdf5_path, 'w') as hdf5_file, fits.open(args.combined_file) as hdul:
-        data = hdul[1].data
-        apogee_ids = data['APOGEE_ID']
-        galah_ids = data['sobject_id']
+    
+    with fits.open(args.combined_file) as hdul:
+        apogee_ids = hdul[1].data['APOGEE_ID']
+        galah_ids = hdul[1].data['sobject_id'] 
 
-        process_spectra(args.apogee_dir, args.galah_dir, apogee_ids, galah_ids, hdf5_file, args.latent_size , args.catalog_path)
+        
+        process_spectra(args.apogee_dir, args.galah_dir, apogee_ids, galah_ids, args.hdf5_dir, args.latent_size, args.catalog_path, args.nside)
+
+        # process_spectra(args.apogee_dir, args.galah_dir, apogee_ids, galah_ids, hdf5_file, args.latent_size , args.catalog_path)
