@@ -103,6 +103,7 @@ def save_to_hdf5(flux, wavelength, sigma, flux_mask, unique_id, instrument_type,
         grp.create_dataset('flux_mask', data=flux_mask)
         grp.create_dataset('latent_code', data=latent_code)
         grp.create_dataset('instrument_type', data=np.string_(instrument_type))
+        grp.create_dataset('unique_id', data=np.string_(unique_id))
         
         # Handle metadata
         for key, value in combined_meta.items():
