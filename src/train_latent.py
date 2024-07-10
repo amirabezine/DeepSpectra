@@ -84,8 +84,7 @@ def save_latent_vectors_to_hdf5(hdf5_path, dict_latent_codes, latent_vectors, ep
 
     try:
         with h5py.File(hdf5_path, 'a') as hdf5_file:
-            for unique_id, index in dict_latent_codes.items():
-                decoded_id = unique_id.decode('utf-8') if isinstance(unique_id, bytes) else unique_id
+            for unique_id, index in dict_latent_codeif isinstance(unique_id, bytes) else unique_id
                 versioned_key = f"{decoded_id}/optimized_latent_code/epoch_{epoch}"
                 # versioned_key = f"{unique_id}/latent_code_epoch_{epoch}"
                 # print(versioned_key)
@@ -94,7 +93,8 @@ def save_latent_vectors_to_hdf5(hdf5_path, dict_latent_codes, latent_vectors, ep
                 hdf5_file[versioned_key] = latent_vectors[index].cpu().detach().numpy()  # Create a new dataset
                 # print("saved  ", versioned_key)
     except OSError as e:
-        print(f"Failed to open file {hdf5_path}: {e}")
+        print(f"Failed to open file {hdf5_path}: {e}")s.items():
+                decoded_id = unique_id.decode('utf-8') 
 
 
 def save_last_latent_vectors_to_hdf5(hdf5_path, dict_latent_codes, latent_vectors):

@@ -10,19 +10,22 @@ training:
   learning_rate: 0.001
   latent_learning_rate: 0.001
   latent_dim: 20
-  max_files: 4000
+  max_files: 500
   split_ratios: [0.8, 0.2, 0]
   checkpoint_interval: 5
   scheduler_gamma: 30
   scheduler_step_size: 0.1
+  n_samples_per_spectrum: 1000
+  validation_split: 0.2
+  n_subspectra: 2
 
 model:
   generator_layers: [256, 512, 256] 
   activation_function: "LeakyReLU"
-  output_dim: 8575
+  output_dim: 500
 
 
-dataset_name: "apogee_dr17"  # or "galah" or "boss"
+dataset_name: "combined"  # or "galah" or "boss"
 
 datasets:
   apogee_dr17:
@@ -40,3 +43,6 @@ datasets:
     path: 'path_to_other_data.hdf5'
     fits_directory: "../../../projects/k-pop/spectra/apogee/dr17"
     max_files: 200
+  combined:
+    type: 'combinedDataset'
+    path: 'data/healpixfiles'

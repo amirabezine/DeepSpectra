@@ -8,7 +8,7 @@ from glob import glob
 
 def ensure_native_byteorder(array):
     if array.dtype.byteorder not in ('=', '|'):
-        return array.byteswap().newbyteorder()
+        array = array.byteswap().newbyteorder('=')
     return array
 
 class IterableSpectraDataset(IterableDataset):
@@ -19,7 +19,6 @@ class IterableSpectraDataset(IterableDataset):
         self.is_validation = is_validation
         self.file_list = glob(os.path.join(hdf5_dir, 'spectra_healpix_*.hdf5'))
         
-        # Split files for cross-validation
         random.shuffle(self.file_list)
         split_idx = int(len(self.file_list) * (1 - validation_split))
         self.file_list = self.file_list[split_idx:] if is_validation else self.file_list[:split_idx]
@@ -40,48 +39,132 @@ class IterableSpectraDataset(IterableDataset):
 
     def process_file(self, file_path):
         with h5py.File(file_path, 'r') as f:
+            healpix_index = os.path.basename(file_path).split('_')[2].split('.')[0]
             for group_name in f.keys():
-                group = f[group_name]
-                
-                # Load data
-                unique_id = group['unique_id'][()].decode('utf-8')
-                flux = ensure_native_byteorder(group['flux'][:])
-                wavelength = ensure_native_byteorder(group['wavelength'][:])
-                sigma = ensure_native_byteorder(group['sigma'][:])
-                mask = ensure_native_byteorder(group['flux_mask'][:])
-                latent_code = ensure_native_byteorder(group['latent_code'][:])
-                
-                # Sample 500 random indices
-                indices = np.random.choice(len(flux), self.n_samples_per_spectrum, replace=False)
-                
-                # Prepare tensors
-                flux_tensor = torch.tensor(flux[indices], dtype=torch.float32)
-                wavelength_tensor = torch.tensor(wavelength[indices], dtype=torch.float32)
-                sigma_tensor = torch.tensor(sigma[indices], dtype=torch.float32)
-                mask_tensor = torch.tensor(mask[indices], dtype=torch.float32)
-                latent_code_tensor = torch.tensor(latent_code, dtype=torch.float32)
-                
-                # Prepare metadata
-                metadata = {
-                    'dec': group['dec'][()],
-                    'instrument_type': group['instrument_type'][()].decode('utf-8'),
-                    'instruments': group['instruments'][()],  # Keep as numpy array
-                    'logg': group['logg'][()],
-                    'logg_err': group['logg_err'][()],
-                    'obj_class': group['obj_class'][()].decode('utf-8'),
-                    'ra': group['ra'][()],
-                    'rv': group['rv'][()],
-                    'rv_err': group['rv_err'][()],
-                    'temp': group['temp'][()],
-                    'temp_err': group['temp_err'][()],
-                }
-                
-                yield unique_id, flux_tensor, wavelength_tensor, sigma_tensor, mask_tensor, latent_code_tensor, metadata
+                group_healpix_index = group_name.split('_')[0]
+                if group_healpix_index == healpix_index:
+                    group = f[group_name]
+                    print("processing file " , group_name)
+                    
+                    try:
+                        unique_id = group['unique_id'][()].decode('utf-8')
+                        flux = ensure_native_byteorder(group['flux'][:])
+                        wavelength = ensure_native_byteorder(group['wavelength'][:])
+                        sigma = ensure_native_byteorder(group['sigma'][:])
+                        mask = ensure_native_byteorder(group['flux_mask'][:])
+                        latent_code = ensure_native_byteorder(group['latent_code'][:])
+                        
+                        indices = np.random.choice(len(flux), self.n_samples_per_spectrum, replace=False)
+                        
+                        flux_tensor = torch.tensor(flux[indices], dtype=torch.float32)
+                        wavelength_tensor = torch.tensor(wavelength[indices], dtype=torch.float32)
+                        sigma_tensor = torch.tensor(sigma[indices], dtype=torch.float32)
+                        mask_tensor = torch.tensor(mask[indices], dtype=torch.float32)
+                        latent_code_tensor = torch.tensor(latent_code, dtype=torch.float32)
+                        
+                        metadata = {
+                            'dec': group['dec'][()],
+                            'instrument_type': group['instrument_type'][()].decode('utf-8'),
+                            'instruments': group['instruments'][()],
+                            'logg': group['logg'][()],
+                            'logg_err': group['logg_err'][()],
+                            'obj_class': group['obj_class'][()].decode('utf-8'),
+                            'ra': group['ra'][()],
+                            'rv': group['rv'][()],
+                            'rv_err': group['rv_err'][()],
+                            'temp': group['temp'][()],
+                            'temp_err': group['temp_err'][()],
+                        }
+                        
+                        yield unique_id, flux_tensor, wavelength_tensor, sigma_tensor, mask_tensor, latent_code_tensor, metadata
+                    except KeyError as e:
+                        print(f"KeyError: {e} in group {group_name}")
+                    except Exception as e:
+                        print(f"Exception: {e} in group {group_name}")
+
+    def load_latent_vectors(self, loaders, latent_dim, device):
+        latent_vectors = []
+        dict_latent_codes = {}
+        processed_ids = set()
+    
+        try:
+            idx = 0
+            for file_path in self.file_list:
+                healpix_index = os.path.basename(file_path).split('_')[2].split('.')[0]
+                with h5py.File(file_path, 'r') as hdf5_file:
+                    for group_name in hdf5_file.keys():
+                        unique_id = group_name
+                        unique_id_healpix_index = unique_id.split('_')[0]
+                        if unique_id_healpix_index == healpix_index and unique_id not in processed_ids:
+                            processed_ids.add(unique_id)
+                            try:
+                                group = hdf5_file[unique_id]
+                                print("processing " , group)
+                                if 'latent_code' in group:
+                                    dict_latent_codes[unique_id] = idx
+                                    data = torch.tensor(group['latent_code'][()], dtype=torch.float32, device=device)
+                                    latent_vectors.append(data)
+                                else:
+                                    print(f"latent_code not found for unique_id {unique_id}")
+                                    latent_vectors.append(torch.zeros(latent_dim, device=device))
+                                idx += 1
+                            except KeyError as e:
+                                print(f"KeyError: {e} - unique_id {unique_id} not found in file {file_path}")
+                                latent_vectors.append(torch.zeros(latent_dim, device=device))
+                                idx += 1
+        except OSError as e:
+            print(f"Failed to open file {self.hdf5_dir}: {e}")
+    
+        if not latent_vectors:
+            raise RuntimeError("No latent vectors were loaded. Check the data directory and file contents.")
+            
+        latent_codes = torch.stack(latent_vectors, dim=0).requires_grad_(True)
+        return latent_codes, dict_latent_codes
+
+    def save_latent_vectors_to_hdf5(self, dict_latent_codes, latent_vectors, epoch):
+        try:
+            for file_path in self.file_list:
+                healpix_index = os.path.basename(file_path).split('_')[2].split('.')[0]
+                with h5py.File(file_path, 'a') as hdf5_file:
+                    print(f"Saving latent vectors to file: {file_path} for epoch {epoch}")
+                    for unique_id, index in dict_latent_codes.items():
+                        unique_id_healpix_index = unique_id.split('_')[0]
+                        if unique_id_healpix_index == healpix_index:
+                            try:
+                                group = hdf5_file[unique_id]
+                                versioned_key = f"optimized_latent_code/epoch_{epoch}"
+                                if versioned_key in group:
+                                    del group[versioned_key]
+                                group.create_dataset(versioned_key, data=latent_vectors[index].cpu().detach().numpy())
+                            except KeyError as e:
+                                print(f"KeyError: {e} - unique_id {unique_id} not found in file {file_path}")
+        except OSError as e:
+            print(f"Failed to open file {self.hdf5_dir}: {e}")
+
+    def save_last_latent_vectors_to_hdf5(self, dict_latent_codes, latent_vectors):
+        try:
+            for file_path in self.file_list:
+                healpix_index = os.path.basename(file_path).split('_')[2].split('.')[0]
+                with h5py.File(file_path, 'a') as hdf5_file:
+                    print(f"Saving last latent vectors to file: {file_path}")
+                    for unique_id, index in dict_latent_codes.items():
+                        unique_id_healpix_index = unique_id.split('_')[0]
+                        if unique_id_healpix_index == healpix_index:
+                            try:
+                                group = hdf5_file[unique_id]
+                                versioned_key = "optimized_latent_code/latest"
+                                if versioned_key in group:
+                                    del group[versioned_key]
+                                group.create_dataset(versioned_key, data=latent_vectors[index].cpu().detach().numpy())
+                            except KeyError as e:
+                                print(f"KeyError: {e} - unique_id {unique_id} not found in file {file_path}")
+        except OSError as e:
+            print(f"Failed to open file {self.hdf5_dir}: {e}")
 
 def collate_fn(batch):
-    unique_ids, fluxes, wavelengths, sigmas, masks, latent_codes, metadatas = zip(*batch)
+    spectrum_ids, fluxes, wavelengths, sigmas, masks, latent_codes, metadatas = zip(*batch)
     return {
-        'unique_id': unique_ids,
+        'spectrum_id': spectrum_ids,
         'flux': torch.stack(fluxes),
         'wavelength': torch.stack(wavelengths),
         'sigma': torch.stack(sigmas),
@@ -89,39 +172,3 @@ def collate_fn(batch):
         'latent_code': torch.stack(latent_codes),
         'metadata': metadatas
     }
-
-def get_dataloaders(hdf5_dir, batch_size=32, n_samples_per_spectrum=500, validation_split=0.2, num_workers=4):
-    train_dataset = IterableSpectraDataset(hdf5_dir, n_samples_per_spectrum, validation_split, is_validation=False)
-    val_dataset = IterableSpectraDataset(hdf5_dir, n_samples_per_spectrum, validation_split, is_validation=True)
-
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn)
-
-    return train_loader, val_loader
-
-# # Example usage
-# if __name__ == "__main__":
-#     hdf5_dir = '../data/healpixfiles'
-#     train_loader, val_loader = get_dataloaders(hdf5_dir)
-
-#     # Example of iterating through the training data
-#     for batch in train_loader:
-#         unique_ids = batch['unique_id']
-#         fluxes = batch['flux']
-#         wavelengths = batch['wavelength']
-#         sigmas = batch['sigma']
-#         masks = batch['mask']
-#         latent_codes = batch['latent_code']
-#         metadatas = batch['metadata']
-
-#         print(f"Batch size: {len(unique_ids)}")
-#         print(f"Flux shape: {fluxes.shape}")
-#         print(f"Wavelength shape: {wavelengths.shape}")
-#         print(f"Sigma shape: {sigmas.shape}")
-#         print(f"Mask shape: {masks.shape}")
-#         print(f"Latent code shape: {latent_codes.shape}")
-#         print(f"First spectrum ID: {unique_ids[0]}")
-#         print(f"First spectrum temperature: {metadatas[0]['temp']}")
-
-#         # Break after first batch for this example
-#         break
