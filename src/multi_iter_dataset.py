@@ -12,7 +12,7 @@ def ensure_native_byteorder(array):
     return array
 
 class IterableSpectraDataset(IterableDataset):
-    def __init__(self, hdf5_dir, n_samples_per_spectrum=500, validation_split=0.2, is_validation=False):
+    def __init__(self, hdf5_dir, n_samples_per_spectrum=500, validation_split=0.2, is_validation=False, max_files=None):
         self.hdf5_dir = hdf5_dir
         self.n_samples_per_spectrum = n_samples_per_spectrum
         self.validation_split = validation_split
@@ -22,6 +22,10 @@ class IterableSpectraDataset(IterableDataset):
         random.shuffle(self.file_list)
         split_idx = int(len(self.file_list) * (1 - validation_split))
         self.file_list = self.file_list[split_idx:] if is_validation else self.file_list[:split_idx]
+
+        if max_files is not None:
+            self.file_list = self.file_list[:max_files]
+
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -44,7 +48,7 @@ class IterableSpectraDataset(IterableDataset):
                 group_healpix_index = group_name.split('_')[0]
                 if group_healpix_index == healpix_index:
                     group = f[group_name]
-                    print("processing file " , group_name)
+                    # print("processing file " , group_name)
                     
                     try:
                         unique_id = group['unique_id'][()].decode('utf-8')

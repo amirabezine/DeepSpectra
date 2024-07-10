@@ -44,7 +44,7 @@ class IterableSpectraDataset(IterableDataset):
                 group_healpix_index = group_name.split('_')[0]
                 if group_healpix_index == healpix_index:
                     group = f[group_name]
-                    print("processing file " , group_name)
+                    # print("processing file " , group_name)
                     
                     try:
                         unique_id = group['unique_id'][()].decode('utf-8')

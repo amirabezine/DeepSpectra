@@ -69,13 +69,6 @@ def prepare_datasets(config, data_path):
     val_loader = DataLoader(val_dataset, batch_size=config['training']['batch_size'], collate_fn=collate_fn, num_workers=config['training']['num_workers'], pin_memory=True)
     return train_loader, val_loader
 
-# def initialize_model_and_latent_codes(config, device, train_loader):
-#     generator = Generator(config['training']['latent_dim'], config['model']['output_dim'], config['model']['generator_layers'], config['model']['activation_function']).to(device)
-    
-#     latent_codes, dict_latent_codes = train_loader.dataset.load_latent_vectors([train_loader], config['training']['latent_dim'], device)
-    
-#     return generator, latent_codes, dict_latent_codes
-
 def initialize_optimizers(config, generator, latent_codes):
     optimizer_g = optim.Adam(generator.parameters(), lr=config['training']['learning_rate'])
     optimizer_l = optim.Adam([latent_codes], lr=config['training']['latent_learning_rate'])
@@ -133,10 +126,6 @@ def load_checkpoints(generator, optimizer_g, optimizer_l, checkpoints_path, conf
     return start_epoch, scheduler_g, scheduler_l, best_val_loss, latent_codes, dict_latent_codes, optimizer_l
 
 
-def save_checkpoint(state, filename):
-    torch.save(state, filename)
-    print(f"Checkpoint saved: {filename}")
-
 def plot_losses(loss_history_path, plots_path):
     loss_history = np.load(loss_history_path, allow_pickle=True).item()
     train_losses = loss_history['train']
@@ -164,6 +153,12 @@ def train_and_validate(generator, latent_codes, dict_latent_codes, optimizer_g, 
     timing_data = []
 
     for epoch in range(start_epoch, num_epochs):
+        # Load checkpoint at the beginning of each epoch
+        _, scheduler_g, scheduler_l, best_val_loss, latent_codes, dict_latent_codes, optimizer_l = load_checkpoints(
+            generator, optimizer_g, optimizer_l, checkpoints_path, config, device, train_loader
+        )
+
+        print("dict = " , len(dict_latent_codes))
         epoch_train_time_start = time.time()
         epoch_train_time = 0
         epoch_val_time = 0
@@ -306,7 +301,6 @@ def train_and_validate(generator, latent_codes, dict_latent_codes, optimizer_g, 
         if (epoch + 1) % config['training']['checkpoint_interval'] == 0:
             save_checkpoint(checkpoint_state, filename=os.path.join(checkpoints_path, f'checkpoint_epoch_{epoch+1}.pth.tar'))
 
-
     torch.save({
         'latent_codes': latent_codes,
         'dict_latent_codes': dict_latent_codes
@@ -328,28 +322,6 @@ def main():
 
     print("Preparing datasets...")
     train_loader, val_loader = prepare_datasets(config, data_path)
-
-    # print("Initializing model and latent codes...")
-    # generator, latent_codes, dict_latent_codes = initialize_model_and_latent_codes(config, device, train_loader)
-
-    # print("Initializing optimizers...")
-    # optimizer_g, optimizer_l = initialize_optimizers(config, generator, latent_codes)
-
-    # print("Loading checkpoints...")
-    # start_epoch, scheduler_g, scheduler_l, best_val_loss, latent_codes, dict_latent_codes = load_checkpoints(
-    #     generator, optimizer_g, optimizer_l, latent_codes, dict_latent_codes, checkpoints_path, config, device
-    # )
-
-    # print("Starting training and validation...")
-    # print("____________________________________________________________________")
-    # print("____________________________________________________________________")
-    # train_and_validate(generator, latent_codes, dict_latent_codes, optimizer_g, optimizer_l, scheduler_g, scheduler_l, 
-    #                    train_loader, val_loader, start_epoch, num_epochs, checkpoints_path, latent_path, device, 
-                       # best_val_loss, data_path, plots_path)
-
-
-
-
 
     print("Initializing model and optimizers...")
     generator = Generator(config['training']['latent_dim'], config['model']['output_dim'], config['model']['generator_layers'], config['model']['activation_function']).to(device)
