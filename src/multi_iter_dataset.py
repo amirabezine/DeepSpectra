@@ -12,9 +12,10 @@ def ensure_native_byteorder(array):
     return array
 
 class IterableSpectraDataset(IterableDataset):
-    def __init__(self, hdf5_dir, n_samples_per_spectrum=500, validation_split=0.2, is_validation=False, max_files=None):
+    def __init__(self, hdf5_dir, n_samples_per_spectrum=500, n_subspectra=10, validation_split=0.2, is_validation=False, max_files=None):
         self.hdf5_dir = hdf5_dir
         self.n_samples_per_spectrum = n_samples_per_spectrum
+        self.n_subspectra = n_subspectra
         self.validation_split = validation_split
         self.is_validation = is_validation
         self.file_list = glob(os.path.join(hdf5_dir, 'spectra_healpix_*.hdf5'))
@@ -25,7 +26,6 @@ class IterableSpectraDataset(IterableDataset):
 
         if max_files is not None:
             self.file_list = self.file_list[:max_files]
-
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -48,7 +48,6 @@ class IterableSpectraDataset(IterableDataset):
                 group_healpix_index = group_name.split('_')[0]
                 if group_healpix_index == healpix_index:
                     group = f[group_name]
-                    # print("processing file " , group_name)
                     
                     try:
                         unique_id = group['unique_id'][()].decode('utf-8')
@@ -58,33 +57,35 @@ class IterableSpectraDataset(IterableDataset):
                         mask = ensure_native_byteorder(group['flux_mask'][:])
                         latent_code = ensure_native_byteorder(group['latent_code'][:])
                         
-                        indices = np.random.choice(len(flux), self.n_samples_per_spectrum, replace=False)
-                        
-                        flux_tensor = torch.tensor(flux[indices], dtype=torch.float32)
-                        wavelength_tensor = torch.tensor(wavelength[indices], dtype=torch.float32)
-                        sigma_tensor = torch.tensor(sigma[indices], dtype=torch.float32)
-                        mask_tensor = torch.tensor(mask[indices], dtype=torch.float32)
-                        latent_code_tensor = torch.tensor(latent_code, dtype=torch.float32)
-                        
-                        metadata = {
-                            'dec': group['dec'][()],
-                            'instrument_type': group['instrument_type'][()].decode('utf-8'),
-                            'instruments': group['instruments'][()],
-                            'logg': group['logg'][()],
-                            'logg_err': group['logg_err'][()],
-                            'obj_class': group['obj_class'][()].decode('utf-8'),
-                            'ra': group['ra'][()],
-                            'rv': group['rv'][()],
-                            'rv_err': group['rv_err'][()],
-                            'temp': group['temp'][()],
-                            'temp_err': group['temp_err'][()],
-                        }
-                        
-                        yield unique_id, flux_tensor, wavelength_tensor, sigma_tensor, mask_tensor, latent_code_tensor, metadata
+                        for _ in range(self.n_subspectra):
+                            indices = np.random.choice(len(flux), self.n_samples_per_spectrum, replace=False)
+                            
+                            flux_tensor = torch.tensor(flux[indices], dtype=torch.float32)
+                            wavelength_tensor = torch.tensor(wavelength[indices], dtype=torch.float32)
+                            sigma_tensor = torch.tensor(sigma[indices], dtype=torch.float32)
+                            mask_tensor = torch.tensor(mask[indices], dtype=torch.float32)
+                            latent_code_tensor = torch.tensor(latent_code, dtype=torch.float32)
+                            
+                            metadata = {
+                                'dec': group['dec'][()],
+                                'instrument_type': group['instrument_type'][()].decode('utf-8'),
+                                'instruments': group['instruments'][()],
+                                'logg': group['logg'][()],
+                                'logg_err': group['logg_err'][()],
+                                'obj_class': group['obj_class'][()].decode('utf-8'),
+                                'ra': group['ra'][()],
+                                'rv': group['rv'][()],
+                                'rv_err': group['rv_err'][()],
+                                'temp': group['temp'][()],
+                                'temp_err': group['temp_err'][()],
+                            }
+                            
+                            yield unique_id, flux_tensor, wavelength_tensor, sigma_tensor, mask_tensor, latent_code_tensor, metadata
                     except KeyError as e:
                         print(f"KeyError: {e} in group {group_name}")
                     except Exception as e:
                         print(f"Exception: {e} in group {group_name}")
+
 
     def load_latent_vectors(self, loaders, latent_dim, device):
         latent_vectors = []

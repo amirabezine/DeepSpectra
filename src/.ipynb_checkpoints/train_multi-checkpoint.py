@@ -63,11 +63,12 @@ def load_configurations():
 
 def prepare_datasets(config, data_path):
     n_subspectra = config['training']['n_subspectra']
-    train_dataset = IterableSpectraDataset(data_path, is_validation=False)
-    val_dataset = IterableSpectraDataset(data_path, is_validation=True)
+    train_dataset = IterableSpectraDataset(data_path, is_validation=False, n_subspectra=n_subspectra)
+    val_dataset = IterableSpectraDataset(data_path, is_validation=True, n_subspectra=n_subspectra)
     train_loader = DataLoader(train_dataset, batch_size=config['training']['batch_size'], collate_fn=collate_fn, num_workers=config['training']['num_workers'], pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=config['training']['batch_size'], collate_fn=collate_fn, num_workers=config['training']['num_workers'], pin_memory=True)
     return train_loader, val_loader
+
 
 def initialize_optimizers(config, generator, latent_codes):
     optimizer_g = optim.Adam(generator.parameters(), lr=config['training']['learning_rate'])
