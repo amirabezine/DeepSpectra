@@ -19,22 +19,25 @@ def create_wavelength_grid():
 
     ])
 
-def interpolate_flux_to_grid(wavelength, flux, wavelength_grid):
+def interpolate_flux_and_sigma_to_grid(wavelength, flux, sigma, wavelength_grid):
     # Create a mask for the wavelength range where we have data
     mask = (wavelength_grid >= np.min(wavelength)) & (wavelength_grid <= np.max(wavelength))
     
     # Get the relevant part of the wavelength grid
     relevant_wavelength_grid = wavelength_grid[mask]
     
-    # Initialize the output array with zeros
+    # Initialize the output arrays with zeros
     flux_interpolated = np.zeros_like(relevant_wavelength_grid)
+    sigma_interpolated = np.zeros_like(relevant_wavelength_grid)
     
     # Only interpolate within the range of the original data
     if np.any(mask):
-        f = interpolate.interp1d(wavelength, flux, kind='linear', bounds_error=False, fill_value=0)
-        flux_interpolated = f(relevant_wavelength_grid)
+        f_flux = interpolate.interp1d(wavelength, flux, kind='linear', bounds_error=False, fill_value=0)
+        f_sigma = interpolate.interp1d(wavelength, sigma, kind='linear', bounds_error=False, fill_value=0)
+        flux_interpolated = f_flux(relevant_wavelength_grid)
+        sigma_interpolated = f_sigma(relevant_wavelength_grid)
     
-    return flux_interpolated, relevant_wavelength_grid
+    return flux_interpolated, sigma_interpolated, relevant_wavelength_grid
 
 
     
@@ -120,49 +123,79 @@ def save_to_hdf5(flux, wavelength, sigma, flux_mask, unique_id, instrument_type,
     hdf5_path = os.path.join(hdf5_dir, f"spectra_healpix_{healpix_index}.hdf5")
     latent_code = torch.normal(0, 10, size=(latent_size,), dtype=torch.float32).numpy()
 
-    flux_interpolated, relevant_wavelength_grid = interpolate_flux_to_grid(wavelength, flux, wavelength_grid)
+    flux_interpolated, sigma_interpolated, relevant_wavelength_grid = interpolate_flux_and_sigma_to_grid(wavelength, flux, sigma, wavelength_grid)
     
-    with h5py.File(hdf5_path, 'a') as hdf5_file:
-        if unique_id in hdf5_file:
-            grp = hdf5_file[unique_id]
-        else:
-            grp = hdf5_file.create_group(unique_id)
+    # Create masks for different wavelength ranges
+    apogee_mask = create_mask_apogee(flux_interpolated, sigma_interpolated)
+    galah_mask = create_mask_galah(flux_interpolated, sigma_interpolated)
+    
+    # Combine masks based on wavelength ranges
+    interpolated_flux_mask = np.zeros_like(flux_interpolated)
+    
+    # APOGEE range
+    apogee_range = (relevant_wavelength_grid >= 15000) & (relevant_wavelength_grid <= 17005)
+    interpolated_flux_mask[apogee_range] = apogee_mask[apogee_range]
+    
+    # GALAH ranges
+    galah_ranges = [
+        (relevant_wavelength_grid >= 4700) & (relevant_wavelength_grid <= 4905),
+        (relevant_wavelength_grid >= 5640) & (relevant_wavelength_grid <= 5880),
+        (relevant_wavelength_grid >= 6450) & (relevant_wavelength_grid <= 6750),
+        (relevant_wavelength_grid >= 7580) & (relevant_wavelength_grid <= 7895)
+    ]
+    for galah_range in galah_ranges:
+        interpolated_flux_mask[galah_range] = galah_mask[galah_range]
+    
+    try:
+        with h5py.File(hdf5_path, 'a') as hdf5_file:
+            if unique_id in hdf5_file:
+                grp = hdf5_file[unique_id]
+            else:
+                grp = hdf5_file.create_group(unique_id)
 
-        grp.create_dataset('flux', data=flux, compression="gzip", compression_opts=9)
-        grp.create_dataset('wavelength', data=wavelength, compression="gzip", compression_opts=9)
-        grp.create_dataset('flux_interpolated', data=flux_interpolated, compression="gzip", compression_opts=9)
-        grp.create_dataset('wavelength_grid', data=relevant_wavelength_grid, compression="gzip", compression_opts=9)
-        grp.create_dataset('sigma', data=sigma, compression="gzip", compression_opts=9)
-        grp.create_dataset('flux_mask', data=flux_mask)
-        grp.create_dataset('latent_code', data=latent_code)
-        grp.create_dataset('instrument_type', data=np.string_(instrument_type))
-        grp.create_dataset('unique_id', data=np.string_(unique_id))
+            # Regular datasets
+            grp.create_dataset('flux', data=flux, compression="gzip", compression_opts=9)
+            grp.create_dataset('wavelength', data=wavelength, compression="gzip", compression_opts=9)
+            grp.create_dataset('sigma', data=sigma, compression="gzip", compression_opts=9)
+            grp.create_dataset('flux_mask', data=flux_mask)
+            grp.create_dataset('latent_code', data=latent_code)
+            grp.create_dataset('instrument_type', data=np.string_(instrument_type))
+            grp.create_dataset('unique_id', data=np.string_(unique_id))
 
-        
-        # Handle metadata
-        for key, value in combined_meta.items():
-            try:
-                if value is None:
-                    # Assuming all None values can be stored as np.nan in the dataset
-                    grp.create_dataset(key, data=np.array([np.nan], dtype=np.float32))
-                elif isinstance(value, list):
-                    # Convert None to np.nan for float compatibility in HDF5
-                    clean_value = [np.nan if v is None else v for v in value]
-                    grp.create_dataset(key, data=np.array(clean_value, dtype=np.float32))
-                elif isinstance(value, (int, float)):
-                    # Single numeric values
-                    grp.create_dataset(key, data=np.float32(value))
-                elif isinstance(value, str):
-                    # Single string values
-                    grp.create_dataset(key, data=np.string_(value))
-                elif isinstance(value, np.ndarray):
-                    # Directly handle numpy arrays (for instruments)
-                    grp.create_dataset(key, data=value, dtype=value.dtype)
-                else:
-                    print(f"Unsupported data type for key {key}: {type(value)}")
-            except Exception as e:
-                print(f"Error while saving {key}: {str(e)}")
+            # Interpolated data
+            if flux_interpolated is not None and len(flux_interpolated) > 0:
+                grp.create_dataset('flux_interpolated', data=flux_interpolated, compression="gzip", compression_opts=9)
+                grp.create_dataset('sigma_interpolated', data=sigma_interpolated, compression="gzip", compression_opts=9)
+                grp.create_dataset('flux_mask_interpolated', data=interpolated_flux_mask)
+            else:
+                print(f"Warning: flux_interpolated is empty for {unique_id}")
 
+            if relevant_wavelength_grid is not None and len(relevant_wavelength_grid) > 0:
+                grp.create_dataset('wavelength_grid', data=relevant_wavelength_grid, compression="gzip", compression_opts=9)
+            else:
+                print(f"Warning: relevant_wavelength_grid is empty for {unique_id}")
+
+            # Handle metadata
+            for key, value in combined_meta.items():
+                try:
+                    if value is None:
+                        grp.create_dataset(key, data=np.array([np.nan], dtype=np.float32))
+                    elif isinstance(value, list):
+                        clean_value = [np.nan if v is None else v for v in value]
+                        grp.create_dataset(key, data=np.array(clean_value, dtype=np.float32))
+                    elif isinstance(value, (int, float)):
+                        grp.create_dataset(key, data=np.float32(value))
+                    elif isinstance(value, str):
+                        grp.create_dataset(key, data=np.string_(value))
+                    elif isinstance(value, np.ndarray):
+                        grp.create_dataset(key, data=value, dtype=value.dtype)
+                    else:
+                        print(f"Unsupported data type for key {key}: {type(value)}")
+                except Exception as e:
+                    print(f"Error while saving {key}: {str(e)}")
+
+    except Exception as e:
+        print(f"Error saving data for {unique_id}: {str(e)}")
 
 
 def extract_apogee_id(filename):

@@ -11,6 +11,15 @@ def ensure_native_byteorder(array):
         array = array.byteswap().newbyteorder('=')
     return array
 
+def create_wavelength_grid():
+    return np.concatenate([
+        np.arange(4700, 4905, 0.05),
+        np.arange(5640, 5880, 0.05),
+        np.arange(6450, 6750, 0.05),
+        np.arange(7580, 7895, 0.05),
+        np.arange(15000, 17005, 0.2)
+    ])
+
 class IterableSpectraDataset(IterableDataset):
     def __init__(self, hdf5_dir, n_samples_per_spectrum=500, n_subspectra=10, validation_split=0.2, is_validation=False, max_files=None):
         self.hdf5_dir = hdf5_dir
@@ -19,7 +28,8 @@ class IterableSpectraDataset(IterableDataset):
         self.validation_split = validation_split
         self.is_validation = is_validation
         self.file_list = glob(os.path.join(hdf5_dir, 'spectra_healpix_*.hdf5'))
-        
+        self.wavelength_grid = create_wavelength_grid()
+
         random.shuffle(self.file_list)
         split_idx = int(len(self.file_list) * (1 - validation_split))
         self.file_list = self.file_list[split_idx:] if is_validation else self.file_list[:split_idx]
@@ -51,102 +61,49 @@ class IterableSpectraDataset(IterableDataset):
                     
                     try:
                         unique_id = group['unique_id'][()].decode('utf-8')
-                        flux = ensure_native_byteorder(group['flux'][:])
-                        wavelength = ensure_native_byteorder(group['wavelength'][:])
-                        sigma = ensure_native_byteorder(group['sigma'][:])
-                        mask = ensure_native_byteorder(group['flux_mask'][:])
-                        latent_code = ensure_native_byteorder(group['latent_code'][:])
-                        
                         flux_interpolated = ensure_native_byteorder(group['flux_interpolated'][:])
                         sigma_interpolated = ensure_native_byteorder(group['sigma_interpolated'][:])
                         wavelength_grid = ensure_native_byteorder(group['wavelength_grid'][:])
-                        interpolated_flux_mask = ensure_native_byteorder(group['interpolated_flux_mask'][:])
-                        
+                        flux_mask_interpolated = ensure_native_byteorder(group['flux_mask_interpolated'][:])
+                        latent_code = ensure_native_byteorder(group['latent_code'][:])
+
+                        metadata = {
+                            'dec': group['dec'][()],
+                            'instrument_type': group['instrument_type'][()].decode('utf-8'),
+                            'instruments': group['instruments'][()],
+                            'logg': group['logg'][()],
+                            'logg_err': group['logg_err'][()],
+                            'obj_class': group['obj_class'][()].decode('utf-8'),
+                            'ra': group['ra'][()],
+                            'rv': group['rv'][()],
+                            'rv_err': group['rv_err'][()],
+                            'temp': group['temp'][()],
+                            'temp_err': group['temp_err'][()],
+                        }
+
                         for _ in range(self.n_subspectra):
-                            indices = np.random.choice(len(flux), self.n_samples_per_spectrum, replace=False)
+                            indices = np.random.choice(len(wavelength_grid), self.n_samples_per_spectrum, replace=False)
                             
-                            flux_tensor = torch.tensor(flux[indices], dtype=torch.float32)
-                            wavelength_tensor = torch.tensor(wavelength[indices], dtype=torch.float32)
-                            sigma_tensor = torch.tensor(sigma[indices], dtype=torch.float32)
-                            mask_tensor = torch.tensor(mask[indices], dtype=torch.float32)
+                            full_flux = np.zeros_like(self.wavelength_grid)
+                            full_sigma = np.zeros_like(self.wavelength_grid)
+                            full_mask = np.zeros_like(self.wavelength_grid)
+
+                            idx_in_full_grid = np.searchsorted(self.wavelength_grid, wavelength_grid[indices])
+                            full_flux[idx_in_full_grid] = flux_interpolated[indices]
+                            full_sigma[idx_in_full_grid] = sigma_interpolated[indices]
+                            full_mask[idx_in_full_grid] = flux_mask_interpolated[indices]
+
+                            flux_tensor = torch.tensor(full_flux, dtype=torch.float32)
+                            sigma_tensor = torch.tensor(full_sigma, dtype=torch.float32)
+                            mask_tensor = torch.tensor(full_mask, dtype=torch.float32)
+                            wavelength_tensor = torch.tensor(self.wavelength_grid, dtype=torch.float32)
                             latent_code_tensor = torch.tensor(latent_code, dtype=torch.float32)
                             
-                            flux_interpolated_tensor = torch.tensor(flux_interpolated, dtype=torch.float32)
-                            sigma_interpolated_tensor = torch.tensor(sigma_interpolated, dtype=torch.float32)
-                            wavelength_grid_tensor = torch.tensor(wavelength_grid, dtype=torch.float32)
-                            interpolated_flux_mask_tensor = torch.tensor(interpolated_flux_mask, dtype=torch.float32)
-                            
-                            metadata = {
-                                'dec': group['dec'][()],
-                                'instrument_type': group['instrument_type'][()].decode('utf-8'),
-                                'instruments': group['instruments'][()],
-                                'logg': group['logg'][()],
-                                'logg_err': group['logg_err'][()],
-                                'obj_class': group['obj_class'][()].decode('utf-8'),
-                                'ra': group['ra'][()],
-                                'rv': group['rv'][()],
-                                'rv_err': group['rv_err'][()],
-                                'temp': group['temp'][()],
-                                'temp_err': group['temp_err'][()],
-                            }
-                            
-                            yield unique_id, flux_tensor, wavelength_tensor, sigma_tensor, mask_tensor, latent_code_tensor, flux_interpolated_tensor, sigma_interpolated_tensor, wavelength_grid_tensor, interpolated_flux_mask_tensor, metadata
+                            yield unique_id, flux_tensor, sigma_tensor, mask_tensor, wavelength_tensor, latent_code_tensor, metadata
                     except KeyError as e:
                         print(f"KeyError: {e} in group {group_name}")
                     except Exception as e:
                         print(f"Exception: {e} in group {group_name}")
-
-    # def process_file(self, file_path):
-    #     with h5py.File(file_path, 'r') as f:
-    #         healpix_index = os.path.basename(file_path).split('_')[2].split('.')[0]
-    #         for group_name in f.keys():
-    #             group_healpix_index = group_name.split('_')[0]
-    #             if group_healpix_index == healpix_index:
-    #                 group = f[group_name]
-                    
-    #                 try:
-    #                     unique_id = group['unique_id'][()].decode('utf-8')
-    #                     flux = ensure_native_byteorder(group['flux'][:])
-    #                     wavelength = ensure_native_byteorder(group['wavelength'][:])
-    #                     sigma = ensure_native_byteorder(group['sigma'][:])
-    #                     mask = ensure_native_byteorder(group['flux_mask'][:])
-    #                     flux_interpolated = ensure_native_byteorder(group['flux_interpolated'][:])
-    #                     wavelength_grid = ensure_native_byteorder(group['wavelength_grid'][:])
-
-    #                     latent_code = ensure_native_byteorder(group['latent_code'][:])
-                        
-    #                     for _ in range(self.n_subspectra):
-    #                         indices = np.random.choice(len(flux), self.n_samples_per_spectrum, replace=False)
-                            
-    #                         flux_tensor = torch.tensor(flux[indices], dtype=torch.float32)
-    #                         wavelength_tensor = torch.tensor(wavelength[indices], dtype=torch.float32)
-    #                         sigma_tensor = torch.tensor(sigma[indices], dtype=torch.float32)
-    #                         mask_tensor = torch.tensor(mask[indices], dtype=torch.float32)
-    #                         latent_code_tensor = torch.tensor(latent_code, dtype=torch.float32)
-    #                         flux_interpolated_tensor = torch.tensor(flux_interpolated, dtype=torch.float32)
-    #                         wavelength_grid_tensor = torch.tensor(wavelength_grid, dtype=torch.float32)
-
-                            
-    #                         metadata = {
-    #                             'dec': group['dec'][()],
-    #                             'instrument_type': group['instrument_type'][()].decode('utf-8'),
-    #                             'instruments': group['instruments'][()],
-    #                             'logg': group['logg'][()],
-    #                             'logg_err': group['logg_err'][()],
-    #                             'obj_class': group['obj_class'][()].decode('utf-8'),
-    #                             'ra': group['ra'][()],
-    #                             'rv': group['rv'][()],
-    #                             'rv_err': group['rv_err'][()],
-    #                             'temp': group['temp'][()],
-    #                             'temp_err': group['temp_err'][()],
-    #                         }
-                            
-    #                         yield unique_id, flux_tensor, wavelength_tensor, sigma_tensor, mask_tensor, latent_code_tensor, flux_interpolated_tensor, wavelength_grid_tensor, metadata
-    #                 except KeyError as e:
-    #                     print(f"KeyError: {e} in group {group_name}")
-    #                 except Exception as e:
-    #                     print(f"Exception: {e} in group {group_name}")
-
 
     def load_latent_vectors(self, loaders, latent_dim, device):
         latent_vectors = []
@@ -165,7 +122,6 @@ class IterableSpectraDataset(IterableDataset):
                             processed_ids.add(unique_id)
                             try:
                                 group = hdf5_file[unique_id]
-                                print("processing " , group)
                                 if 'latent_code' in group:
                                     dict_latent_codes[unique_id] = idx
                                     data = torch.tensor(group['latent_code'][()], dtype=torch.float32, device=device)
@@ -228,17 +184,14 @@ class IterableSpectraDataset(IterableDataset):
             print(f"Failed to open file {self.hdf5_dir}: {e}")
 
 def collate_fn(batch):
-    spectrum_ids, fluxes, wavelengths, sigmas, masks, latent_codes, flux_interpolateds, sigma_interpolateds, wavelength_grids, interpolated_flux_masks, metadatas = zip(*batch)
+    spectrum_ids, fluxes, sigmas, masks, wavelengths, latent_codes, metadatas = zip(*batch)
     return {
         'spectrum_id': spectrum_ids,
         'flux': torch.stack(fluxes),
-        'wavelength': torch.stack(wavelengths),
         'sigma': torch.stack(sigmas),
         'mask': torch.stack(masks),
+        'wavelength': torch.stack(wavelengths),
         'latent_code': torch.stack(latent_codes),
-        'flux_interpolated': torch.stack(flux_interpolateds),
-        'sigma_interpolated': torch.stack(sigma_interpolateds),
-        'wavelength_grid': torch.stack(wavelength_grids),
-        'interpolated_flux_mask': torch.stack(interpolated_flux_masks),
         'metadata': metadatas
     }
+

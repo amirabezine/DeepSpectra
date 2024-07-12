@@ -4,7 +4,7 @@ paths:
   latent: "latent/"
 
 training:
-  num_workers: 13
+  num_workers: 4
   batch_size: 10
   num_epochs: 100
   learning_rate: 0.001
@@ -22,7 +22,7 @@ training:
 model:
   generator_layers: [256, 512, 256] 
   activation_function: "LeakyReLU"
-  output_dim: 500
+  output_dim: 31225
 
 
 dataset_name: "combined"  # or "galah" or "boss"
@@ -45,5 +45,5 @@ datasets:
     max_files: 200
   combined:
     type: 'combinedDataset'
-    path: 'data/healpixfiles'
-    file_path: 'data/healpixfiles/spectra_healpix_170.hdf5'
+    path: 'data/healpixfiles_inter'
+    file_path: 'data/healpixfiles_inter/spectra_healpix_170.hdf5'
