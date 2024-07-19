@@ -126,6 +126,85 @@ class IterableSpectraDataset(IterableDataset):
                     except Exception as e:
                         print(f"Exception: {e} in group {group_name}")
 
+    def load_latent_vectors(self, loaders, latent_dim, device):
+        latent_vectors = []
+        dict_latent_codes = {}
+        processed_ids = set()
+    
+        try:
+            idx = 0
+            for file_path in self.file_list:
+                healpix_index = os.path.basename(file_path).split('_')[2].split('.')[0]
+                with h5py.File(file_path, 'r') as hdf5_file:
+                    for group_name in hdf5_file.keys():
+                        unique_id = group_name
+                        unique_id_healpix_index = unique_id.split('_')[0]
+                        if unique_id_healpix_index == healpix_index and unique_id not in processed_ids:
+                            processed_ids.add(unique_id)
+                            try:
+                                group = hdf5_file[unique_id]
+                                if 'latent_code' in group:
+                                    dict_latent_codes[unique_id] = idx
+                                    data = torch.tensor(group['latent_code'][()], dtype=torch.float32, device=device)
+                                    latent_vectors.append(data)
+                                else:
+                                    print(f"latent_code not found for unique_id {unique_id}")
+                                    latent_vectors.append(torch.zeros(latent_dim, device=device))
+                                idx += 1
+                            except KeyError as e:
+                                print(f"KeyError: {e} - unique_id {unique_id} not found in file {file_path}")
+                                latent_vectors.append(torch.zeros(latent_dim, device=device))
+                                idx += 1
+        except OSError as e:
+            print(f"Failed to open file {self.hdf5_dir}: {e}")
+    
+        if not latent_vectors:
+            raise RuntimeError("No latent vectors were loaded. Check the data directory and file contents.")
+            
+        latent_codes = torch.stack(latent_vectors, dim=0).requires_grad_(True)
+        return latent_codes, dict_latent_codes
+
+    def save_latent_vectors_to_hdf5(self, dict_latent_codes, latent_vectors, epoch):
+        try:
+            for file_path in self.file_list:
+                healpix_index = os.path.basename(file_path).split('_')[2].split('.')[0]
+                with h5py.File(file_path, 'a') as hdf5_file:
+                    print(f"Saving latent vectors to file: {file_path} for epoch {epoch}")
+                    for unique_id, index in dict_latent_codes.items():
+                        unique_id_healpix_index = unique_id.split('_')[0]
+                        if unique_id_healpix_index == healpix_index:
+                            try:
+                                group = hdf5_file[unique_id]
+                                versioned_key = f"optimized_latent_code/epoch_{epoch}"
+                                if versioned_key in group:
+                                    del group[versioned_key]
+                                group.create_dataset(versioned_key, data=latent_vectors[index].cpu().detach().numpy())
+                            except KeyError as e:
+                                print(f"KeyError: {e} - unique_id {unique_id} not found in file {file_path}")
+        except OSError as e:
+            print(f"Failed to open file {self.hdf5_dir}: {e}")
+
+    def save_last_latent_vectors_to_hdf5(self, dict_latent_codes, latent_vectors):
+        try:
+            for file_path in self.file_list:
+                healpix_index = os.path.basename(file_path).split('_')[2].split('.')[0]
+                with h5py.File(file_path, 'a') as hdf5_file:
+                    print(f"Saving last latent vectors to file: {file_path}")
+                    for unique_id, index in dict_latent_codes.items():
+                        unique_id_healpix_index = unique_id.split('_')[0]
+                        if unique_id_healpix_index == healpix_index:
+                            try:
+                                group = hdf5_file[unique_id]
+                                versioned_key = "optimized_latent_code/latest"
+                                if versioned_key in group:
+                                    del group[versioned_key]
+                                group.create_dataset(versioned_key, data=latent_vectors[index].cpu().detach().numpy())
+                            except KeyError as e:
+                                print(f"KeyError: {e} - unique_id {unique_id} not found in file {file_path}")
+        except OSError as e:
+            print(f"Failed to open file {self.hdf5_dir}: {e}")
+
+
 def collate_fn(batch):
     spectrum_ids, fluxes, wavelengths, latent_codes, weights, lengths = zip(*batch)
     return {

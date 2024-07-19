@@ -7,7 +7,7 @@ class Generator(nn.Module):
     def __init__(self, input_dim, output_dim, layers, activation_function='LeakyReLU'):
         super(Generator, self).__init__()
         modules = []
-        print("output_dim  generr = " , output_dim)
+        
         for layer_dim in layers:
             modules.append(nn.Linear(input_dim, layer_dim))
             if activation_function == "LeakyReLU":

@@ -15,15 +15,16 @@ training:
   checkpoint_interval: 5
   scheduler_gamma: 30
   scheduler_step_size: 0.1
-  n_samples_per_spectrum: 1500
+  n_samples_per_spectrum: 7000
   validation_split: 0.2
-  n_subspectra: 6
+  n_subspectra: 2
 
 model:
   generator_layers: [24, 256, 512, 256] 
   activation_function: "LeakyReLU"
   # output_dim: 31225 #### for interpolation
-  output_dim: 26000 
+  # output_dim: 26000
+  output_dim: 31225
   max_wavelength: 17500
   pe_dim: 4
   

@@ -11,6 +11,14 @@ def ensure_native_byteorder(array):
         array = array.byteswap().newbyteorder('=')
     return array
 
+def create_wavelength_grid():
+    return np.concatenate([
+        np.arange(4700, 4905, 0.05),
+        np.arange(5640, 5880, 0.05),
+        np.arange(6450, 6750, 0.05),
+        np.arange(7580, 7895, 0.05),
+        np.arange(15000, 17005, 0.2)
+    ])
 class IterableSpectraDataset(IterableDataset):
     def __init__(self, hdf5_dir, n_samples_per_spectrum=500, n_subspectra=10, validation_split=0.2, is_validation=False, max_files=None, yield_full_spectrum=False):
         self.hdf5_dir = hdf5_dir
@@ -19,8 +27,8 @@ class IterableSpectraDataset(IterableDataset):
         self.validation_split = validation_split
         self.is_validation = is_validation
         self.file_list = glob(os.path.join(hdf5_dir, 'spectra_healpix_*.hdf5'))
+        self.wavelength_grid = create_wavelength_grid()
         self.yield_full_spectrum = yield_full_spectrum
-        self.max_length = 25300
 
         random.shuffle(self.file_list)
         split_idx = int(len(self.file_list) * (1 - validation_split))
@@ -62,29 +70,39 @@ class IterableSpectraDataset(IterableDataset):
                         flux_mask_interpolated = ensure_native_byteorder(group['flux_mask_interpolated'][:])
                         latent_code = ensure_native_byteorder(group['latent_code'][:])
 
+                        metadata = {
+                            'dec': group['dec'][()],
+                            'instrument_type': group['instrument_type'][()].decode('utf-8'),
+                            'instruments': group['instruments'][()],
+                            'logg': group['logg'][()],
+                            'logg_err': group['logg_err'][()],
+                            'obj_class': group['obj_class'][()].decode('utf-8'),
+                            'ra': group['ra'][()],
+                            'rv': group['rv'][()],
+                            'rv_err': group['rv_err'][()],
+                            'temp': group['temp'][()],
+                            'temp_err': group['temp_err'][()],
+                        }
+
                         for _ in range(self.n_subspectra):
                             indices = np.random.choice(len(wavelength_grid), self.n_samples_per_spectrum, replace=False)
+                            
+                            full_flux = np.zeros_like(self.wavelength_grid)
+                            full_sigma = np.zeros_like(self.wavelength_grid)
+                            full_mask = np.zeros_like(self.wavelength_grid)
 
-                            flux = flux_interpolated[indices]
-                            sigma = sigma_interpolated[indices]
-                            mask = flux_mask_interpolated[indices]
-                            wavelength = wavelength_grid[indices]
+                            idx_in_full_grid = np.searchsorted(self.wavelength_grid, wavelength_grid[indices])
+                            full_flux[idx_in_full_grid] = flux_interpolated[indices]
+                            full_sigma[idx_in_full_grid] = sigma_interpolated[indices]
+                            full_mask[idx_in_full_grid] = flux_mask_interpolated[indices]
 
-                            sigma_safe = sigma**2 + 1e-5
-                            weight = mask / sigma_safe
-
-                            original_length = len(flux)
-
-                            flux_tensor = torch.zeros(self.max_length, dtype=torch.float32)
-                            wavelength_tensor = torch.zeros(self.max_length, dtype=torch.float32)
+                            flux_tensor = torch.tensor(full_flux, dtype=torch.float32)
+                            sigma_tensor = torch.tensor(full_sigma, dtype=torch.float32)
+                            mask_tensor = torch.tensor(full_mask, dtype=torch.float32)
+                            wavelength_tensor = torch.tensor(self.wavelength_grid, dtype=torch.float32)
                             latent_code_tensor = torch.tensor(latent_code, dtype=torch.float32)
-                            weight_tensor = torch.zeros(self.max_length, dtype=torch.float32)
-
-                            flux_tensor[:original_length] = torch.tensor(flux, dtype=torch.float32)
-                            wavelength_tensor[:original_length] = torch.tensor(wavelength, dtype=torch.float32)
-                            weight_tensor[:original_length] = torch.tensor(weight, dtype=torch.float32)
-
-                            yield unique_id, flux_tensor, wavelength_tensor, latent_code_tensor, weight_tensor, original_length
+                            
+                            yield unique_id, flux_tensor, sigma_tensor, mask_tensor, wavelength_tensor, latent_code_tensor, metadata
                     except KeyError as e:
                         print(f"KeyError: {e} in group {group_name}")
                     except Exception as e:
@@ -106,21 +124,36 @@ class IterableSpectraDataset(IterableDataset):
                         flux_mask_interpolated = ensure_native_byteorder(group['flux_mask_interpolated'][:])
                         latent_code = ensure_native_byteorder(group['latent_code'][:])
 
-                        sigma_safe = sigma_interpolated**2 + 1e-5
-                        weight = flux_mask_interpolated / sigma_safe
+                        metadata = {
+                            'dec': group['dec'][()],
+                            'instrument_type': group['instrument_type'][()].decode('utf-8'),
+                            'instruments': group['instruments'][()],
+                            'logg': group['logg'][()],
+                            'logg_err': group['logg_err'][()],
+                            'obj_class': group['obj_class'][()].decode('utf-8'),
+                            'ra': group['ra'][()],
+                            'rv': group['rv'][()],
+                            'rv_err': group['rv_err'][()],
+                            'temp': group['temp'][()],
+                            'temp_err': group['temp_err'][()],
+                        }
 
-                        original_length = len(flux_interpolated)
+                        full_flux = np.zeros_like(self.wavelength_grid)
+                        full_sigma = np.zeros_like(self.wavelength_grid)
+                        full_mask = np.zeros_like(self.wavelength_grid)
 
-                        flux_tensor = torch.zeros(self.max_length, dtype=torch.float32)
-                        wavelength_tensor = torch.zeros(self.max_length, dtype=torch.float32)
+                        idx_in_full_grid = np.searchsorted(self.wavelength_grid, wavelength_grid)
+                        full_flux[idx_in_full_grid] = flux_interpolated
+                        full_sigma[idx_in_full_grid] = sigma_interpolated
+                        full_mask[idx_in_full_grid] = flux_mask_interpolated
+
+                        flux_tensor = torch.tensor(full_flux, dtype=torch.float32)
+                        sigma_tensor = torch.tensor(full_sigma, dtype=torch.float32)
+                        mask_tensor = torch.tensor(full_mask, dtype=torch.float32)
+                        wavelength_tensor = torch.tensor(self.wavelength_grid, dtype=torch.float32)
                         latent_code_tensor = torch.tensor(latent_code, dtype=torch.float32)
-                        weight_tensor = torch.zeros(self.max_length, dtype=torch.float32)
-
-                        flux_tensor[:original_length] = torch.tensor(flux_interpolated, dtype=torch.float32)
-                        wavelength_tensor[:original_length] = torch.tensor(wavelength_grid, dtype=torch.float32)
-                        weight_tensor[:original_length] = torch.tensor(weight, dtype=torch.float32)
-
-                        yield unique_id, flux_tensor, wavelength_tensor, latent_code_tensor, weight_tensor, original_length
+                        
+                        yield unique_id, flux_tensor, sigma_tensor, mask_tensor, wavelength_tensor, latent_code_tensor, metadata
                     except KeyError as e:
                         print(f"KeyError: {e} in group {group_name}")
                     except Exception as e:
@@ -204,15 +237,15 @@ class IterableSpectraDataset(IterableDataset):
         except OSError as e:
             print(f"Failed to open file {self.hdf5_dir}: {e}")
 
-
 def collate_fn(batch):
-    spectrum_ids, fluxes, wavelengths, latent_codes, weights, lengths = zip(*batch)
+    spectrum_ids, fluxes, sigmas, masks, wavelengths, latent_codes, metadatas = zip(*batch)
     return {
         'spectrum_id': spectrum_ids,
         'flux': torch.stack(fluxes),
+        'sigma': torch.stack(sigmas),
+        'mask': torch.stack(masks),
         'wavelength': torch.stack(wavelengths),
         'latent_code': torch.stack(latent_codes),
-        'weight': torch.stack(weights),
-        'length': torch.tensor(lengths)
+        'metadata': metadatas
     }
 
