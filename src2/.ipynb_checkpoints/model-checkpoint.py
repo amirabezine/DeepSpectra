@@ -7,7 +7,7 @@ class Generator(nn.Module):
     def __init__(self, input_dim, output_dim, layers, activation_function='LeakyReLU'):
         super(Generator, self).__init__()
         modules = []
-        print("output_dim  generr = " , output_dim)
+        
         for layer_dim in layers:
             modules.append(nn.Linear(input_dim, layer_dim))
             if activation_function == "LeakyReLU":
@@ -102,4 +102,4 @@ class FullNetwork(nn.Module):
         generated_flux = self.downsampling_layer(high_res_flux, wavelength_grid, real_wavelengths)
         print(f"generated_flux shape: {generated_flux.shape}")
         
-        return generated_flux
+        return generated_flux, generator_output

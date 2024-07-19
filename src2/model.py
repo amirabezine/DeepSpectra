@@ -102,4 +102,4 @@ class FullNetwork(nn.Module):
         generated_flux = self.downsampling_layer(high_res_flux, wavelength_grid, real_wavelengths)
         print(f"generated_flux shape: {generated_flux.shape}")
         
-        return generated_flux
+        return generated_flux, generator_output
