@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from torchinterp1d import interp1d
 
@@ -45,8 +46,9 @@ class DownsamplingLayer(nn.Module):
             (7583, 7885, 0.05),
             (15100, 17000, 0.2)
         ]
+        self.extended_wavelength = self.create_extended_wavelength_grid()
 
-    def extend_wavelength_grid(self, observed_wavelength):
+    def create_extended_wavelength_grid(self):
         extended_wavelengths = []
         for start, end, step in self.channels:
             pre_pad = np.arange(start - self.padding * step, start, step)
@@ -55,47 +57,73 @@ class DownsamplingLayer(nn.Module):
             extended_wavelengths.extend(pre_pad)
             extended_wavelengths.extend(channel)
             extended_wavelengths.extend(post_pad)
-        extended_wavelengths = np.unique(np.array(extended_wavelengths))
-        return torch.FloatTensor(extended_wavelengths)
+        return torch.FloatTensor(np.unique(extended_wavelengths))
 
     def forward(self, high_res_flux, high_res_wavelength, observed_wavelengths, device):
-        high_res_wavelength = torch.FloatTensor(high_res_wavelength).to(device)
-        
-        # Ensure high_res_wavelength is sorted
-        high_res_wavelength, sorted_indices = high_res_wavelength.sort()
-        high_res_flux = high_res_flux[:, sorted_indices]
+        print("Entering DownsamplingLayer forward")
+        try:
+            high_res_flux = high_res_flux.to(device)
+            high_res_wavelength = high_res_wavelength.to(device)
+            observed_wavelengths = observed_wavelengths.to(device)
+            extended_wavelength = self.extended_wavelength.to(device)
+            
+            print(f"high_res_flux: shape={high_res_flux.shape}, dtype={high_res_flux.dtype}")
+            print(f"high_res_wavelength: shape={high_res_wavelength.shape}, dtype={high_res_wavelength.dtype}")
+            print(f"observed_wavelengths: shape={observed_wavelengths.shape}, dtype={observed_wavelengths.dtype}")
+            print(f"extended_wavelength: shape={extended_wavelength.shape}, dtype={extended_wavelength.dtype}")
 
-        # Extend the wavelength grid once for all batches
-        extended_wavelength = self.extend_wavelength_grid(observed_wavelengths[0].cpu()).to(device)
+            # Check for NaNs or infinities
+            if torch.isnan(high_res_flux).any() or torch.isinf(high_res_flux).any():
+                print("NaN or Inf detected in high_res_flux")
+            if torch.isnan(high_res_wavelength).any() or torch.isinf(high_res_wavelength).any():
+                print("NaN or Inf detected in high_res_wavelength")
 
-        # Perform interpolation for the whole batch
-        interpolated_fluxes = []
-        for i in range(high_res_flux.size(0)):
-            extended_interpolated_flux = interp1d(
-                high_res_wavelength.unsqueeze(0),
-                high_res_flux[i].unsqueeze(0),
-                extended_wavelength.unsqueeze(0)
-            )
+            # Interpolate to extended wavelength grid
+            extended_flux = interp1d(high_res_wavelength, high_res_flux, extended_wavelength)
+            print("Extended flux interpolated")
 
-            observed_interpolated_flux = interp1d(
-                high_res_wavelength.unsqueeze(0),
-                high_res_flux[i].unsqueeze(0),
-                observed_wavelengths[i].unsqueeze(0)
-            )
+            # Check for NaNs or infinities after first interpolation
+            if torch.isnan(extended_flux).any() or torch.isinf(extended_flux).any():
+                print("NaN or Inf detected in extended_flux")
 
-            interpolated_fluxes.append(observed_interpolated_flux.squeeze())
+            # Interpolate to observed wavelengths
+            observed_flux = interp1d(extended_wavelength, extended_flux, observed_wavelengths)
+            print("Observed flux interpolated")
 
-        return torch.stack(interpolated_fluxes)
+            # Final check for NaNs or infinities
+            if torch.isnan(observed_flux).any() or torch.isinf(observed_flux).any():
+                print("NaN or Inf detected in observed_flux")
+
+            return observed_flux
+
+        except Exception as e:
+            print(f"Error in DownsamplingLayer forward: {e}")
+            raise
 
 class FullNetwork(nn.Module):
     def __init__(self, generator, high_res_wavelength, device):
         super(FullNetwork, self).__init__()
         self.generator = generator
         self.downsampling_layer = DownsamplingLayer()
-        self.high_res_wavelength = high_res_wavelength
+        self.high_res_wavelength = torch.tensor(high_res_wavelength, dtype=torch.float16)
         self.device = device
     
     def forward(self, z, observed_wavelengths):
-        high_res_flux = self.generator(z)  # Generate high-res flux from the generator
-        downsampled_flux = self.downsampling_layer(high_res_flux, self.high_res_wavelength, observed_wavelengths, self.device)
-        return downsampled_flux
+        print("Entering FullNetwork forward")
+        try:
+            high_res_flux = self.generator(z)
+            print(f"Generator output - high_res_flux: shape={high_res_flux.shape}, dtype={high_res_flux.dtype}")
+            
+            if torch.isnan(high_res_flux).any() or torch.isinf(high_res_flux).any():
+                print("NaN or Inf detected in generator output")
+
+            downsampled_flux = self.downsampling_layer(high_res_flux, self.high_res_wavelength, observed_wavelengths, self.device)
+            print("Downsampling completed")
+            
+            if torch.isnan(downsampled_flux).any() or torch.isinf(downsampled_flux).any():
+                print("NaN or Inf detected in downsampled_flux")
+
+            return downsampled_flux
+        except Exception as e:
+            print(f"Error in FullNetwork forward: {e}")
+            raise

@@ -101,11 +101,11 @@ class IterableSpectraDataset(IterableDataset):
                             full_sigma[idx_in_full_grid] = sigma_interpolated[indices]
                             full_mask[idx_in_full_grid] = flux_mask_interpolated[indices]
 
-                            flux_tensor = torch.tensor(full_flux, dtype=torch.float32)
-                            sigma_tensor = torch.tensor(full_sigma, dtype=torch.float32)
-                            mask_tensor = torch.tensor(full_mask, dtype=torch.float32)
-                            wavelength_tensor = torch.tensor(self.wavelength_grid, dtype=torch.float32)
-                            latent_code_tensor = torch.tensor(latent_code, dtype=torch.float32)
+                            flux_tensor = torch.tensor(full_flux, dtype=torch.float16)
+                            sigma_tensor = torch.tensor(full_sigma, dtype=torch.float16)
+                            mask_tensor = torch.tensor(full_mask, dtype=torch.float16)
+                            wavelength_tensor = torch.tensor(self.wavelength_grid, dtype=torch.float16)
+                            latent_code_tensor = torch.tensor(latent_code, dtype=torch.float16)
                             
                             yield unique_id, flux_tensor, sigma_tensor, mask_tensor, wavelength_tensor, latent_code_tensor, metadata
                     except KeyError as e:
@@ -152,11 +152,11 @@ class IterableSpectraDataset(IterableDataset):
                         full_sigma[idx_in_full_grid] = sigma_interpolated
                         full_mask[idx_in_full_grid] = flux_mask_interpolated
 
-                        flux_tensor = torch.tensor(full_flux, dtype=torch.float32)
-                        sigma_tensor = torch.tensor(full_sigma, dtype=torch.float32)
-                        mask_tensor = torch.tensor(full_mask, dtype=torch.float32)
-                        wavelength_tensor = torch.tensor(self.wavelength_grid, dtype=torch.float32)
-                        latent_code_tensor = torch.tensor(latent_code, dtype=torch.float32)
+                        flux_tensor = torch.tensor(full_flux, dtype=torch.float16)
+                        sigma_tensor = torch.tensor(full_sigma, dtype=torch.float16)
+                        mask_tensor = torch.tensor(full_mask, dtype=torch.float16)
+                        wavelength_tensor = torch.tensor(self.wavelength_grid, dtype=torch.float16)
+                        latent_code_tensor = torch.tensor(latent_code, dtype=torch.float16)
                         
                         yield unique_id, flux_tensor, sigma_tensor, mask_tensor, wavelength_tensor, latent_code_tensor, metadata
                     except KeyError as e:
@@ -183,7 +183,7 @@ class IterableSpectraDataset(IterableDataset):
                                 group = hdf5_file[unique_id]
                                 if 'latent_code' in group:
                                     dict_latent_codes[unique_id] = idx
-                                    data = torch.tensor(group['latent_code'][()], dtype=torch.float32, device=device)
+                                    data = torch.tensor(group['latent_code'][()], dtype=torch.float16, device=device)
                                     latent_vectors.append(data)
                                 else:
                                     print(f"latent_code not found for unique_id {unique_id}")

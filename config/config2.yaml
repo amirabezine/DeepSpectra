@@ -5,7 +5,7 @@ paths:
 
 training:
   num_workers: 2
-  batch_size: 5
+  batch_size: 2
   num_epochs: 50
   learning_rate: 0.001
   latent_learning_rate: 0.001
