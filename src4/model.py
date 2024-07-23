@@ -105,7 +105,7 @@ class FullNetwork(nn.Module):
         super(FullNetwork, self).__init__()
         self.generator = generator
         self.downsampling_layer = DownsamplingLayer()
-        self.high_res_wavelength = torch.tensor(high_res_wavelength, dtype=torch.float16)
+        self.high_res_wavelength = torch.tensor(high_res_wavelength, dtype=torch.float32)
         self.device = device
     
     def forward(self, z, observed_wavelengths):
@@ -113,11 +113,15 @@ class FullNetwork(nn.Module):
         try:
             high_res_flux = self.generator(z)
             print(f"Generator output - high_res_flux: shape={high_res_flux.shape}, dtype={high_res_flux.dtype}")
+            print(f"Generator output - high_res_flux: min={high_res_flux.min()}, max={high_res_flux.max()}, mean={high_res_flux.mean()}")
+
             
             if torch.isnan(high_res_flux).any() or torch.isinf(high_res_flux).any():
                 print("NaN or Inf detected in generator output")
 
             downsampled_flux = self.downsampling_layer(high_res_flux, self.high_res_wavelength, observed_wavelengths, self.device)
+            print(f"Downsampled flux - min={downsampled_flux.min()}, max={downsampled_flux.max()}, mean={downsampled_flux.mean()}")
+
             print("Downsampling completed")
             
             if torch.isnan(downsampled_flux).any() or torch.isinf(downsampled_flux).any():

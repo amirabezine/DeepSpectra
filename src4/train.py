@@ -1,21 +1,50 @@
-import torch
 import time
 import numpy as np
+import torch
 from tqdm import tqdm
 from loss import WeightedMSELoss
 from checkpoint import CheckpointManager
 from utils import save_timing_data
-from model import FullNetwork
 import os
+from model import FullNetwork, Generator  # Import the new model classes
 from dataset import create_wavelength_grid
-import torch.nn.functional as F
-from torch.cuda.amp import autocast, GradScaler
+import torch.nn as nn
 
+def check_grad(module, grad_input, grad_output):
+    for i, grad in enumerate(grad_input):
+        if grad is None:
+            print(f"Gradient at input index {i} of module {module} is None")
+        else:
+            if torch.isnan(grad).any() or torch.isinf(grad).any():
+                print(f"NaN or Inf in gradients at input index {i} of module {module}")
+
+        
 class Trainer:
+    # def __init__(self, config, generator, latent_codes, dict_latent_codes, optimizer_g, optimizer_l, scheduler_g, scheduler_l, train_loader, val_loader, start_epoch, device, best_val_loss):
+    #     self.config = config
+    #     self.generator = generator
+    #     self.high_res_wavelength = create_wavelength_grid()
+    #     self.full_network = FullNetwork(generator, self.high_res_wavelength, device)
+    #     self.latent_codes = latent_codes
+    #     self.dict_latent_codes = dict_latent_codes
+    #     self.optimizer_g = optimizer_g
+    #     self.optimizer_l = optimizer_l
+    #     self.scheduler_g = scheduler_g
+    #     self.scheduler_l = scheduler_l
+    #     self.train_loader = train_loader
+    #     self.val_loader = val_loader
+    #     self.start_epoch = start_epoch
+    #     self.device = device
+    #     self.best_val_loss = best_val_loss
+    #     self.loss_fn = WeightedMSELoss()
+
+
+
     def __init__(self, config, generator, latent_codes, dict_latent_codes, optimizer_g, optimizer_l, scheduler_g, scheduler_l, train_loader, val_loader, start_epoch, device, best_val_loss):
         self.config = config
-        high_res_wavelength = create_wavelength_grid()
-        self.full_network = FullNetwork(generator, high_res_wavelength, device).to(device)
+        self.generator = generator
+        self.high_res_wavelength = create_wavelength_grid()
+        self.full_network = FullNetwork(generator, self.high_res_wavelength, device)
         self.latent_codes = latent_codes
         self.dict_latent_codes = dict_latent_codes
         self.optimizer_g = optimizer_g
@@ -28,8 +57,13 @@ class Trainer:
         self.device = device
         self.best_val_loss = best_val_loss
         self.loss_fn = WeightedMSELoss()
-        self.scaler = GradScaler()
 
+        # Register gradient checking hook
+        for module in self.generator.modules():
+            if isinstance(module, nn.Linear):
+                module.register_backward_hook(check_grad)
+
+    
     def handle_missing_ids(self, batch):
         unique_ids = batch['spectrum_id']
         missing_ids = [uid for uid in unique_ids if uid not in self.dict_latent_codes]
@@ -56,17 +90,74 @@ class Trainer:
     def compute_loss(self, generated, flux, mask, sigma_safe):
         return self.loss_fn.compute(generated, flux, mask / sigma_safe)
 
-    def print_gpu_memory(self):
-        print(f"Allocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
-        print(f"Cached: {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
+    # def train_one_epoch(self, epoch, timing_data):
+    #     self.full_network.train()
+    #     epoch_losses = []
+    #     epoch_losses_before = []
+    #     epoch_train_time_start = time.time()
+    #     epoch_weight_opt_time = 0
+    #     epoch_latent_opt_time = 0
+
+    #     train_bar = tqdm(self.train_loader, desc=f"Training Epoch {epoch + 1}/{self.config.num_epochs}")
+    #     for batch in train_bar:
+    #         self.handle_missing_ids(batch)
+
+    #         indices = torch.tensor([self.dict_latent_codes[uid] for uid in batch['spectrum_id']], device=self.device)
+    #         flux = batch['flux'].to(self.device)
+    #         mask = batch['mask'].to(self.device)
+    #         sigma = batch['sigma'].to(self.device)
+    #         sigma_safe = sigma**2 + 1e-5
+    #         observed_wavelengths = batch['wavelength'].to(self.device)
+
+    #         # Generator step
+    #         optimizer_g_start_time = time.time()
+    #         self.latent_codes.requires_grad_(False)
+    #         self.optimizer_g.zero_grad()
+    #         generated = self.full_network(self.latent_codes[indices], observed_wavelengths)
+    #         loss_g = self.compute_loss(generated, flux, mask, sigma_safe)
+    #         print(
+    #         if torch.isnan(loss_g) or torch.isinf(loss_g):
+    #             print("NaN or Inf detected in loss_g")
+    #             # Optionally, raise an error or exit
+    #             raise ValueError("NaN or Inf in loss_g")
+
+    #         loss_g.backward()
+    #         print("loss_g back done")
+    #         torch.nn.utils.clip_grad_norm_(self.generator.parameters(), max_norm=1.0)
+    #         self.optimizer_g.step
+    #         print("opt g step done")
+    #         epoch_weight_opt_time += time.time() - optimizer_g_start_time
+    #         epoch_losses_before.append(loss_g.item())
+
+    #         # Latent codes step
+    #         optimizer_l_start_time = time.time()
+    #         for param in self.full_network.parameters():
+    #             param.requires_grad = False
+    #         self.latent_codes.requires_grad_(True)
+    #         self.optimizer_l.zero_grad()
+    #         generated = self.full_network(self.latent_codes[indices], observed_wavelengths)
+    #         loss_l = self.compute_loss(generated, flux, mask, sigma_safe)
+    #         loss_l.backward()
+    #         print("loss_l back done")
+    #         torch.nn.utils.clip_grad_norm_([self.latent_codes], max_norm=1.0)
+
+    #         self.optimizer_l.step()
+    #         print("opt l step done")
+    #         for param in self.full_network.parameters():
+    #             param.requires_grad = True
+    #         epoch_latent_opt_time += time.time() - optimizer_l_start_time
+    #         epoch_losses.append(loss_l.item())
+
+    #     average_train_loss_before = np.mean(epoch_losses_before)
+    #     average_train_loss = np.mean(epoch_losses)
+    #     timing_data.append((epoch + 1, time.time() - epoch_train_time_start, epoch_weight_opt_time, epoch_latent_opt_time))
+    #     return average_train_loss, average_train_loss_before
+
 
     def train_one_epoch(self, epoch, timing_data):
-        self.full_network.train()
+        self.generator.train()
         epoch_losses = []
-        epoch_losses_before = []
         epoch_train_time_start = time.time()
-        epoch_weight_opt_time = 0
-        epoch_latent_opt_time = 0
 
         train_bar = tqdm(self.train_loader, desc=f"Training Epoch {epoch + 1}/{self.config.num_epochs}")
         for batch in train_bar:
@@ -79,76 +170,43 @@ class Trainer:
             sigma_safe = sigma**2 + 1e-5
             observed_wavelengths = batch['wavelength'].to(self.device)
 
-            # Convert numpy arrays to tensors
-            if isinstance(observed_wavelengths, np.ndarray):
-                observed_wavelengths = torch.tensor(observed_wavelengths, dtype=torch.float32).to(self.device)
-            if isinstance(flux, np.ndarray):
-                flux = torch.tensor(flux, dtype=torch.float32).to(self.device)
-            if isinstance(mask, np.ndarray):
-                mask = torch.tensor(mask, dtype=torch.float32).to(self.device)
-            if isinstance(sigma_safe, np.ndarray):
-                sigma_safe = torch.tensor(sigma_safe, dtype=torch.float32).to(self.device)
-
             # Generator step
             optimizer_g_start_time = time.time()
             self.latent_codes.requires_grad_(False)
             self.optimizer_g.zero_grad()
-            try:
-                print("Before forward pass in generator step")
-                with autocast():
-                    generated = self.full_network(self.latent_codes[indices], observed_wavelengths)
-                    print(f"After forward pass in generator step, generated shape: {generated.shape}")
-                    
-                    if torch.isnan(generated).any():
-                        print("NaN detected in generated tensor")
-                    
-                    loss_g = self.compute_loss(generated, flux, mask, sigma_safe)
-                    print(f"Computed loss in generator step: {loss_g.item()}")
-                
-                self.scaler.scale(loss_g).backward()
-                print("Backward pass completed in generator step")
-                self.scaler.step(self.optimizer_g)
-                self.scaler.update()
-                epoch_weight_opt_time += time.time() - optimizer_g_start_time
-                epoch_losses_before.append(loss_g.item())
-            except Exception as e:
-                print(f"Error during generator step: {e}")
-                continue
+            high_res_flux = self.generator(self.latent_codes[indices])
+            
+            # Temporarily bypass downsampling
+            generated = high_res_flux[:, :observed_wavelengths.shape[1]]
+            
+            # Check shapes
+            print(f"high_res_flux shape: {high_res_flux.shape}")
+            print(f"generated shape: {generated.shape}")
 
-            # Latent codes step
-            optimizer_l_start_time = time.time()
-            try:
-                for param in self.full_network.generator.parameters():
-                    param.requires_grad = False
-                self.latent_codes.requires_grad_(True)
-                self.optimizer_l.zero_grad()
-                print("Before forward pass in latent codes step")
-                with autocast():
-                    generated = self.full_network(self.latent_codes[indices], observed_wavelengths)
-                    print(f"After forward pass in latent codes step, generated shape: {generated.shape}")
-                    
-                    if torch.isnan(generated).any():
-                        print("NaN detected in generated tensor during latent codes step")
-                    
-                    loss_l = self.compute_loss(generated, flux, mask, sigma_safe)
-                    print(f"Computed loss in latent codes step: {loss_l.item()}")
-                
-                self.scaler.scale(loss_l).backward()
-                print("Backward pass completed in latent codes step")
-                self.scaler.step(self.optimizer_l)
-                self.scaler.update()
-                for param in self.full_network.generator.parameters():
-                    param.requires_grad = True
-                epoch_latent_opt_time += time.time() - optimizer_l_start_time
-                epoch_losses.append(loss_l.item())
-            except Exception as e:
-                print(f"Error during latent codes step: {e}")
-                continue
+            loss_g = self.compute_loss(generated, flux, mask, sigma_safe)
 
-        average_train_loss_before = np.mean(epoch_losses_before)
+            # Check for NaNs/Infs in loss
+            if torch.isnan(loss_g) or torch.isinf(loss_g):
+                print("NaN or Inf detected in loss_g")
+                raise ValueError("NaN or Inf in loss_g")
+
+            loss_g.backward()
+
+            # Check gradients
+            for name, param in self.generator.named_parameters():
+                if param.grad is None:
+                    print(f"Gradient not flowing for parameter: {name}")
+                elif torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                    print(f"NaN or Inf in gradient for parameter: {name}")
+
+            torch.nn.utils.clip_grad_norm_(self.generator.parameters(), max_norm=1.0)
+            self.optimizer_g.step()
+            epoch_losses.append(loss_g.item())
+
         average_train_loss = np.mean(epoch_losses)
-        timing_data.append((epoch + 1, time.time() - epoch_train_time_start, epoch_weight_opt_time, epoch_latent_opt_time))
-        return average_train_loss, average_train_loss_before
+        timing_data.append((epoch + 1, time.time() - epoch_train_time_start))
+        return average_train_loss
+        
 
     def validate_one_epoch(self, epoch):
         self.full_network.eval()
@@ -166,37 +224,14 @@ class Trainer:
             sigma_safe = sigma**2 + 1e-5
             observed_wavelengths = batch['wavelength'].to(self.device)
 
-            # Convert numpy arrays to tensors
-            if isinstance(observed_wavelengths, np.ndarray):
-                observed_wavelengths = torch.tensor(observed_wavelengths, dtype=torch.float32).to(self.device)
-            if isinstance(flux, np.ndarray):
-                flux = torch.tensor(flux, dtype=torch.float32).to(self.device)
-            if isinstance(mask, np.ndarray):
-                mask = torch.tensor(mask, dtype=torch.float32).to(self.device)
-            if isinstance(sigma_safe, np.ndarray):
-                sigma_safe = torch.tensor(sigma_safe, dtype=torch.float32).to(self.device)
-
             self.latent_codes = self.latent_codes.detach().requires_grad_(True)
             self.optimizer_l.zero_grad()
-            try:
-                print(f"Before forward pass in validation")
-                with autocast():
-                    generated = self.full_network(self.latent_codes[indices], observed_wavelengths)
-                    print(f"After forward pass in validation, generated shape: {generated.shape}")
-                    
-                    if torch.isnan(generated).any():
-                        print("NaN detected in generated tensor during validation")
-                    
-                    val_loss = self.compute_loss(generated, flux, mask, sigma_safe)
-                    print(f"Computed validation loss: {val_loss.item()}")
-                
-                self.scaler.scale(val_loss).backward()
-                self.scaler.step(self.optimizer_l)
-                self.scaler.update()
-                val_losses.append(val_loss.item())
-            except Exception as e:
-                print(f"Error during validation: {e}")
-                continue
+            generated = self.full_network(self.latent_codes[indices], observed_wavelengths)
+            val_loss = self.compute_loss(generated, flux, mask, sigma_safe)
+            val_loss.backward()
+
+            self.optimizer_l.step()
+            val_losses.append(val_loss.item())
 
         average_val_loss = np.mean(val_losses)
         return average_val_loss, time.time() - validation_start_time
@@ -261,3 +296,14 @@ class Trainer:
         save_timing_data(os.path.join(self.config.plots_path, f'timing_data.csv'), timing_data)
 
         return self.latent_codes, self.dict_latent_codes  # Return the final versions
+
+
+
+
+
+
+
+
+
+
+

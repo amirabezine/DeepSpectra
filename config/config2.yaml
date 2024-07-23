@@ -20,7 +20,7 @@ training:
   n_subspectra: 2
 
 model:
-  generator_layers: [24, 256, 512, 256] 
+  generator_layers: [24, 256, 256] 
   activation_function: "LeakyReLU"
   # output_dim: 31225 #### for interpolation
   # output_dim: 26000

@@ -21,7 +21,7 @@ def main():
 
     print("Initializing model and optimizers...")
     generator = Generator(config.latent_dim, config.output_dim, config.generator_layers, config.activation_function).to(device)
-    latent_codes = torch.randn(1, config.latent_dim, device=device)  # Initialize with a single random vector
+    latent_codes = torch.randn(1, config.latent_dim,requires_grad=True, device=device)  # Initialize with a single random vector
     dict_latent_codes = {}
     optimizer_initializer = OptimizerInitializer(config, generator, latent_codes)
     optimizer_g, optimizer_l = optimizer_initializer.initialize_optimizers()
@@ -32,6 +32,7 @@ def main():
 
     print("Starting training and validation...")
     trainer = Trainer(config, generator, latent_codes, dict_latent_codes, optimizer_g, optimizer_l, scheduler_g, scheduler_l, train_loader, val_loader, start_epoch, device, best_val_loss)
+
     latent_codes, dict_latent_codes = trainer.train_and_validate()
 
     print("Plotting losses...")
