@@ -2,11 +2,12 @@ paths:
   checkpoints: "checkpoints/"
   plots: "plots/"
   latent: "latent/"
+  tensorboard: "tensorboard/"
 
 training:
-  num_workers: 2
-  batch_size: 2
-  num_epochs: 50
+  num_workers: 10
+  batch_size: 8
+  num_epochs: 15
   learning_rate: 0.001
   latent_learning_rate: 0.001
   latent_dim: 20
