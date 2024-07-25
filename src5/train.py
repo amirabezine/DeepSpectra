@@ -51,6 +51,7 @@ class Trainer:
     def compute_loss(self, generated, flux, mask, sigma_safe):
         return self.loss_fn.compute(generated, flux, mask / sigma_safe)
 
+    
     def train_one_epoch(self, epoch, timing_data):
         self.spectrum_generator.train()
         epoch_losses = []
@@ -58,47 +59,59 @@ class Trainer:
         epoch_train_time_start = time.time()
         epoch_weight_opt_time = 0
         epoch_latent_opt_time = 0
-
+    
         train_bar = tqdm(self.train_loader, desc=f"Training Epoch {epoch + 1}/{self.config.num_epochs}")
         for batch in train_bar:
             self.handle_missing_ids(batch)
             observed_wavelengths = batch['wavelength'].to(self.device)
-
             indices = torch.tensor([self.dict_latent_codes[uid] for uid in batch['spectrum_id']], device=self.device)
             flux = batch['flux'].to(self.device)
             mask = batch['mask'].to(self.device)
             sigma = batch['sigma'].to(self.device)
             sigma_safe = sigma**2 + 1e-5
-
+    
             # Generator step
-            optimizer_g_start_time = time.time()
             self.latent_codes.requires_grad_(False)
+            for param in self.spectrum_generator.generator.parameters():
+                param.requires_grad = True
             self.optimizer_g.zero_grad()
             generated_before = self.spectrum_generator(self.latent_codes[indices], observed_wavelengths)
             loss_g = self.compute_loss(generated_before, flux, mask, sigma_safe)
             loss_g.backward()
             self.optimizer_g.step()
-            epoch_weight_opt_time += time.time() - optimizer_g_start_time
+            epoch_weight_opt_time += time.time() - time.time()
             epoch_losses_before.append(loss_g.item())
-
+    
             # Latent codes step
-            optimizer_l_start_time = time.time()
-            self.spectrum_generator.generator.requires_grad_(False)
+            for param in self.spectrum_generator.generator.parameters():
+                param.requires_grad = False
             self.latent_codes.requires_grad_(True)
             self.optimizer_l.zero_grad()
             generated_after = self.spectrum_generator(self.latent_codes[indices], observed_wavelengths)
             loss_l = self.compute_loss(generated_after, flux, mask, sigma_safe)
             loss_l.backward()
-            self.optimizer_l.step()
-            self.spectrum_generator.generator.requires_grad_(True)
-            epoch_latent_opt_time += time.time() - optimizer_l_start_time
-            epoch_losses.append(loss_l.item())
+            print("Gradients on latent codes:", self.latent_codes.grad)
+            print("Latent codes in optimizer:", list(self.optimizer_l.param_groups[0]['params'])[0].grad)
 
+            # print("generated_after grad_fn:", generated_after.grad_fn)
+
+            # print("Gradients on latent codes:", self.latent_codes.grad)  # Debugging print
+
+            if generated_after.grad is not None:
+                print("Gradients computed on generated output.")
+            else:
+                print("No gradients on generated output.")
+
+            self.optimizer_l.step()
+            for param in self.spectrum_generator.generator.parameters():
+                param.requires_grad = True
+            epoch_latent_opt_time += time.time() - time.time()
+            epoch_losses.append(loss_l.item())
+    
         average_train_loss_before = np.mean(epoch_losses_before)
         average_train_loss = np.mean(epoch_losses)
         timing_data.append((epoch + 1, time.time() - epoch_train_time_start, epoch_weight_opt_time, epoch_latent_opt_time))
         return average_train_loss, average_train_loss_before
-
 
     def validate_one_epoch(self, epoch):
         self.spectrum_generator.eval()
@@ -115,8 +128,11 @@ class Trainer:
             mask = batch['mask'].to(self.device)
             sigma = batch['sigma'].to(self.device)
             sigma_safe = sigma**2 + 1e-5
+            
+            for param in self.spectrum_generator.generator.parameters():
+                param.requires_grad = False  # Freeze generator weights
+            self.latent_codes.requires_grad_(True)  # Activate latent codes
 
-            self.latent_codes.requires_grad_(True)
             self.optimizer_l.zero_grad()
             generated = self.spectrum_generator(self.latent_codes[indices], observed_wavelengths)  # Using new SpectrumGenerator
             val_loss = self.compute_loss(generated, flux, mask, sigma_safe)

@@ -6,10 +6,10 @@ paths:
 
 training:
   num_workers: 10
-  batch_size: 8
-  num_epochs: 15
+  batch_size: 5
+  num_epochs: 50
   learning_rate: 0.001
-  latent_learning_rate: 0.001
+  latent_learning_rate: 0.01
   latent_dim: 20
   max_files: 1900
   split_ratios: [0.8, 0.2, 0]
